@@ -122,6 +122,10 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     else:
         MODELS_TO_TRY = [
             "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-001",
+            "gemini-1.5-flash-002",
         ]
 
         import time
@@ -176,6 +180,10 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                                 time.sleep(2 ** attempt)
                                 last_error = (model_name, type(e).__name__, err_str)
                                 continue
+                            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                                print(f"  {model_name} quota exhausted, trying next model...")
+                                last_error = (model_name, type(e).__name__, err_str)
+                                break
                             print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
                             last_error = (model_name, type(e).__name__, err_str)
                             continue
