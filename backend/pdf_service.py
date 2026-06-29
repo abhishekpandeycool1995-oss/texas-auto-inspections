@@ -120,10 +120,11 @@ def draw_text(page, x, y, text, fontsize=7):
         page.insert_text((x, y - 3), text.strip(), fontsize=fontsize, color=(0, 0, 0), fontname="helv")
 
 def draw_editable_text(page, x, y, text, field_name, fontsize=7.5, width=160):
-    if not text or not text.strip():
-        return
-    text = text.strip()
-    tw = min(width, len(text) * fontsize * 0.5 + 6)
+    if text and text.strip():
+        text = text.strip()
+    else:
+        text = ""
+    tw = max(30, min(width, len(text) * fontsize * 0.5 + 6))
     w = fitz.Widget()
     w.rect = fitz.Rect(x, y - fontsize - 1, x + tw, y + 1)
     w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
@@ -153,14 +154,13 @@ def fill_pdf(input_pdf_path, output_pdf_path, data_dict):
     ]
 
     for data_key, field_label in header_map:
-        val = data_dict.get(data_key)
-        if val:
-            info = HEADER_FIELDS.get(field_label)
-            if info:
-                page_idx, x1, x2, y = info
-                text_x = HEADER_TEXT_X["left"] if x1 == 113 else HEADER_TEXT_X["right"]
-                width = 150 if x1 == 113 else 180
-                draw_editable_text(doc[page_idx], text_x, y + 16, str(val), data_key, fontsize=9, width=width)
+        val = data_dict.get(data_key, "")
+        info = HEADER_FIELDS.get(field_label)
+        if info:
+            page_idx, x1, x2, y = info
+            text_x = HEADER_TEXT_X["left"] if x1 == 113 else HEADER_TEXT_X["right"]
+            width = 150 if x1 == 113 else 180
+            draw_editable_text(doc[page_idx], text_x, y + 16, str(val) if val else "", data_key, fontsize=9, width=width)
 
     SECTION_HEADERS = {
         0: [(387, 399), (578, 590)],
@@ -206,19 +206,18 @@ def fill_pdf(input_pdf_path, output_pdf_path, data_dict):
         for col_key, x_center in cols.items():
             draw_checkbox(page, x_center, y_center, col_key == status, f"chk_{item_num}_{col_key}")
 
-        if note:
-            draw_editable_text(page, 475, y_center + 3, note, f"note_{item_num}", fontsize=6.5, width=100)
+        draw_editable_text(page, 475, y_center + 3, note or "", f"note_{item_num}", fontsize=6.5, width=100)
 
     extra_notes = data_dict.get("extra_notes", "")
-    if extra_notes and len(doc) > 6:
-        draw_editable_text(doc[6], 60, 55, str(extra_notes)[:200], "extra_notes", fontsize=8, width=480)
+    if len(doc) > 6:
+        draw_editable_text(doc[6], 60, 55, str(extra_notes)[:200] if extra_notes else "", "extra_notes", fontsize=8, width=480)
 
     for i in range(1, 6):
         concern_key = f"concern_{i}"
         concern_val = data_dict.get(concern_key, "")
-        if concern_val and len(doc) > 6:
+        if len(doc) > 6:
             y_pos = 44 + (i - 1) * 31
-            draw_editable_text(doc[6], 60, y_pos + 12, str(concern_val)[:100], f"concern_{i}", fontsize=8, width=480)
+            draw_editable_text(doc[6], 60, y_pos + 12, str(concern_val)[:100] if concern_val else "", f"concern_{i}", fontsize=8, width=480)
 
     doc.save(output_pdf_path, deflate=True)
     doc.close()
