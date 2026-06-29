@@ -159,7 +159,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             "gemini-2.5-pro",
             "gemini-2.0-flash",
             "gemini-2.0-flash-001",
-            "gemini-1.5-flash-002",
+            "gemini-1.5-flash",
         ]
 
         import time
