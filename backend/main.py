@@ -57,7 +57,7 @@ def get_quota():
 
 # Explicit prompt mapping handwriting to specific keys.
 PROMPT = """
-You are an expert handwriting transcriber. I have attached a handwritten vehicle pre-purchase inspection checklist for the Texas First Auto Inspection 173-point form.
+You are an expert handwriting transcriber. I have attached MULTIPLE IMAGES that together form ONE vehicle pre-purchase inspection checklist — the Texas First Auto Inspection 173-point form. These images may be in ANY order — reassemble them mentally as a single form.
 I need you to extract the information and map it EXACTLY to the following JSON structure.
 
 For each item number N (1 through 173), determine:
@@ -156,8 +156,9 @@ async def process_inspection(files: List[UploadFile] = File(...)):
 
         try:
             client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
-            extracted_json = {}
 
+            # Read and normalize all images first
+            image_parts = []
             for f in files:
                 try:
                     img_bytes = await f.read()
@@ -165,59 +166,58 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                     print(f"  READ ERROR for {f.filename}: {type(e).__name__}: {e}")
                     raise
                 print(f"Processing {f.filename}: {len(img_bytes)} bytes, content_type={f.content_type}")
-
                 try:
                     image_data, mime_type = normalize_image(img_bytes, f.content_type)
                 except Exception as e:
                     print(f"NORMALIZE ERROR for {f.filename}: {type(e).__name__}: {e}")
                     raise
+                image_parts.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
 
-                response = None
-                for model_name in MODELS_TO_TRY:
-                    for attempt in range(5):
-                        try:
-                            print(f"  Trying {model_name} (attempt {attempt+1}/5) for {f.filename}")
-                            image_part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
-                            response = client.models.generate_content(
-                                model=model_name,
-                                contents=[image_part, PROMPT]
-                            )
-                            print(f"  {model_name} OK")
-                            break
-                        except HTTPException:
-                            raise
-                        except Exception as e:
-                            err_str = str(e)
-                            if "503" in err_str or "UNAVAILABLE" in err_str:
-                                print(f"  {model_name} overloaded, retrying in {2**attempt}s...")
-                                time.sleep(2 ** attempt)
-                                last_error = (model_name, type(e).__name__, err_str)
-                                continue
-                            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                                print(f"  {model_name} quota exhausted, trying next model...")
-                                last_error = (model_name, type(e).__name__, err_str)
-                                break
-                            print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
+            # Send ALL images in a single API call so the AI sees the full form
+            extracted_json = {}
+            response = None
+            for model_name in MODELS_TO_TRY:
+                for attempt in range(5):
+                    try:
+                        print(f"  Trying {model_name} (attempt {attempt+1}/5) with {len(image_parts)} images")
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=image_parts + [PROMPT]
+                        )
+                        print(f"  {model_name} OK")
+                        break
+                    except HTTPException:
+                        raise
+                    except Exception as e:
+                        err_str = str(e)
+                        if "503" in err_str or "UNAVAILABLE" in err_str:
+                            print(f"  {model_name} overloaded, retrying in {2**attempt}s...")
+                            time.sleep(2 ** attempt)
                             last_error = (model_name, type(e).__name__, err_str)
                             continue
-                    if response:
-                        break
-
-                if response:
-                    text = response.text.strip()
-                    if text.startswith("```json"): text = text[7:-3]
-                    elif text.startswith("```"): text = text[3:-3]
-                    try:
-                        partial = json.loads(text)
-                    except json.JSONDecodeError as je:
-                        print(f"  JSON ERROR from {model_name}: {text[:200]}")
-                        last_error = (model_name, "JSONDecodeError", str(je))
+                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                            print(f"  {model_name} quota exhausted, trying next model...")
+                            last_error = (model_name, type(e).__name__, err_str)
+                            break
+                        print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
+                        last_error = (model_name, type(e).__name__, err_str)
                         continue
-                    n = sum(1 for k in partial if k.startswith("item_"))
-                    print(f"  {f.filename}: {n} items, {len(partial)} keys")
-                    extracted_json.update(partial)
+                if response:
+                    break
 
-            if not extracted_json:
+            if response:
+                text = response.text.strip()
+                if text.startswith("```json"): text = text[7:-3]
+                elif text.startswith("```"): text = text[3:-3]
+                try:
+                    extracted_json = json.loads(text)
+                except json.JSONDecodeError as je:
+                    print(f"  JSON ERROR from {model_name}: {text[:200]}")
+                    last_error = (model_name, "JSONDecodeError", str(je))
+                    extracted_json = {}
+                n = sum(1 for k in extracted_json if k.startswith("item_"))
+                print(f"  Parsed: {n} items, {len(extracted_json)} keys")
+            else:
                 print(f"WARNING: All AI models failed. Last error: {last_error}")
                 extracted_json = {}
             print(f"Total: {len(extracted_json)} keys")
