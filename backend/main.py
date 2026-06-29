@@ -122,7 +122,6 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     else:
         MODELS_TO_TRY = [
             "gemini-2.5-flash",
-            "gemini-1.5-flash",
         ]
 
         import time
@@ -158,21 +157,30 @@ async def process_inspection(files: List[UploadFile] = File(...)):
 
                 response = None
                 for model_name in MODELS_TO_TRY:
-                    try:
-                        print(f"  Trying {model_name} for {f.filename}")
-                        image_part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=[image_part, PROMPT]
-                        )
-                        print(f"  {model_name} OK")
+                    for attempt in range(5):
+                        try:
+                            print(f"  Trying {model_name} (attempt {attempt+1}/5) for {f.filename}")
+                            image_part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
+                            response = client.models.generate_content(
+                                model=model_name,
+                                contents=[image_part, PROMPT]
+                            )
+                            print(f"  {model_name} OK")
+                            break
+                        except HTTPException:
+                            raise
+                        except Exception as e:
+                            err_str = str(e)
+                            if "503" in err_str or "UNAVAILABLE" in err_str:
+                                print(f"  {model_name} overloaded, retrying in {2**attempt}s...")
+                                time.sleep(2 ** attempt)
+                                last_error = (model_name, type(e).__name__, err_str)
+                                continue
+                            print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
+                            last_error = (model_name, type(e).__name__, err_str)
+                            continue
+                    if response:
                         break
-                    except HTTPException:
-                        raise
-                    except Exception as e:
-                        print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
-                        last_error = (model_name, type(e).__name__, str(e))
-                        continue
 
                 if response:
                     text = response.text.strip()
