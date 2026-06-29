@@ -156,10 +156,9 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     else:
         MODELS_TO_TRY = [
             "gemini-2.5-flash",
-            "gemini-2.5-pro",
+            "gemini-2.5-flash-001",
             "gemini-2.0-flash",
             "gemini-2.0-flash-001",
-            "gemini-1.5-flash",
         ]
 
         import time
@@ -175,7 +174,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 return data, ct
 
         try:
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
             extracted_json = {}
             last_error = None
 
