@@ -106,8 +106,8 @@ def draw_checkbox(page, x, y, checked, field_name, size=4):
     page.draw_rect(rect, color=(0, 0, 0), width=0.5, fill=(1, 1, 1))
     if checked:
         cx, cy = x, y
-        page.draw_line((cx - s + 1, cy - s + 1), (cx + s - 1, cy + s - 1), color=(0, 0, 0), width=1)
-        page.draw_line((cx - s + 1, cy + s - 1), (cx + s - 1, cy - s + 1), color=(0, 0, 0), width=1)
+        page.draw_line((cx - s + 1, cy + s - 3), (cx - 1, cy + 1), color=(0, 0, 0), width=1.2)
+        page.draw_line((cx - 1, cy + 1), (cx + s - 1, cy - s + 2), color=(0, 0, 0), width=1.2)
 
 def draw_text(page, x, y, text, fontsize=7):
     if text:
