@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Texas 1st Auto Inspections</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="background-effects">
+        <div class="glow glow-1"></div>
+        <div class="glow glow-2"></div>
+    </div>
+
+    <main class="container">
+        <header>
+            <h1>Texas 1st Auto <span class="highlight">Inspections</span></h1>
+            <p>Upload handwritten inspection notes (1-10 photos) to generate your official PDF.</p>
+        </header>
+
+        <div class="upload-card" id="upload-zone">
+            <input type="file" id="file-input" accept="image/*" multiple hidden>
+            <div class="upload-content">
+                <svg class="upload-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                </svg>
+                <h3>Drag & Drop your notes here</h3>
+                <p>or click to browse (up to 10 photos)</p>
+            </div>
+            <div id="image-previews" class="hidden preview-grid"></div>
+        </div>
+
+        <div class="file-count" id="file-count" hidden></div>
+
+        <div class="actions">
+            <button id="generate-btn" class="btn-primary" disabled>
+                <span class="btn-text">Generate Official PDF</span>
+                <div class="spinner hidden"></div>
+            </button>
+        </div>
+
+        <div id="status-message" class="hidden"></div>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

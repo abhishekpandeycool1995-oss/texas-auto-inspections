@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+pypdf
+google-genai
+pydantic
+pymupdf
+Pillow
+pillow-heif
