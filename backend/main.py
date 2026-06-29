@@ -57,74 +57,53 @@ def get_quota():
 
 # Explicit prompt mapping handwriting to specific keys.
 PROMPT = """
-You are an expert handwriting transcriber. I have attached MULTIPLE IMAGES that together form ONE vehicle pre-purchase inspection checklist — the Texas First Auto Inspection 173-point form. These images may be in ANY order — reassemble them mentally as a single form.
-I need you to extract the information and map it EXACTLY to the following JSON structure.
+You are an expert forensic handwriting transcriber for a vehicle inspection form. You will receive MULTIPLE PHOTOS of a single 173-point inspection checklist. They may be in any order — reassemble them mentally.
 
-For each item number N (1 through 173), determine:
-1. What status was marked (the column that was ticked/circled)
-2. Any notes written in the Details column
+Your task: transcribe EVERY item you can read, exactly as marked. Be thorough — look carefully at each image. If handwriting is unclear, make your best guess.
 
-IMPORTANT: Output ONLY the status keys that are TRUE/ticked. Do NOT output false values.
-The value for each status key MUST be `true` (boolean), NOT a string like "PASS" or "FAIL".
-Example correct format: {"item_1_PASS": true, "item_4_OK": true}
-Example WRONG format: {"item_1_PASS": "PASS", "item_4_OK": "OK"}
+JSON rules:
+- Output ONLY status keys that are TRUE/ticked/circled. No false values.
+- Each value MUST be `true` (boolean), NOT a string like "PASS".
+- For blank items, do NOT include them.
 
-Use these key formats based on which section the item belongs to:
+Key formats by section:
 
-ITEMS 1-8 (Interior): OK | PASS | FAIL
-  - "item_N_OK": true, "item_N_PASS": true, "item_N_FAIL": true
+ITEMS 1-8 (Interior → OK/PASS/FAIL):
+  "item_1_OK": true, "item_1_PASS": true, "item_1_FAIL": true
 
-ITEMS 9-24 (Seats & Carpet): PASS | BLEMISH | DIRTY
-  - "item_N_PASS": true, "item_N_BLEMISH": true, "item_N_DIRTY": true
+ITEMS 9-24 (Seats & Carpet → PASS/BLEMISH/DIRTY):
+  "item_9_PASS": true, "item_9_BLEMISH": true, "item_9_DIRTY": true
 
-ITEMS 25-63 (Electrical System): WORKS | BROKEN | CRACKED
-  - "item_N_WORKS": true, "item_N_BROKEN": true, "item_N_CRACKED": true
+ITEMS 25-63 (Electrical → WORKS/BROKEN/CRACKED):
+  "item_25_WORKS": true, "item_25_BROKEN": true, "item_25_CRACKED": true
 
-ITEMS 64-78 (Dashboard): PASS | FAIL | NA
-ITEMS 79-83 (Safety): PASS | FAIL | NA
+ITEMS 64-83 (Dashboard & Safety → PASS/FAIL/NA):
+  "item_64_PASS": true, "item_64_FAIL": true, "item_64_NA": true
 
-ITEMS 84-101 (Exterior): OK | SCRATCH | DING | CHIP | RUST | DENT
-  - "item_N_OK": true, "item_N_SCRATCH": true, "item_N_DING": true, "item_N_CHIP": true, "item_N_RUST": true, "item_N_DENT": true
+ITEMS 84-101 (Exterior → OK/SCRATCH/DING/CHIP/RUST/DENT):
+  "item_84_OK": true, "item_84_SCRATCH": true
 
-ITEMS 102-113 (Glass): OK | CHIP | SCRATCH | CRACKED
-ITEMS 114-116 (Mirrors): OK | CHIPS | CRACK | HAZY | MISSING
-ITEMS 117-124 (Tires & Wheels): EXCELLENT | GOOD | FAIR | POOR
-ITEMS 125-146 (Under Hood): NO | YES | NA
-ITEMS 147-151 (Suspension): PASS | FAIL | NA
-ITEMS 152-157 (Under Carriage): PASS | FAIL | NA
-ITEMS 158-161 (Test Drive): EXCELLENT | GOOD | FAIR | POOR
-ITEMS 162-167 (Brake System): PASS | FAIL | NA
-ITEMS 168-170 (Diagnostics): PASS | FAIL | NA
-ITEM 171 (Overall Condition): EXCELLENT | GOOD | FAIR | POOR
-ITEM 172 (Frame Damage): YES | NO | NA
-ITEM 173 (Flood Damage): YES | NO | NA
+ITEMS 102-113 (Glass → OK/CHIP/SCRATCH/CRACKED)
+ITEMS 114-116 (Mirrors → OK/CHIPS/CRACK/HAZY/MISSING)
+ITEMS 117-124 (Tires → EXCELLENT/GOOD/FAIR/POOR)
+ITEMS 125-146 (Under Hood → NO/YES/NA)
+ITEMS 147-151 (Suspension → PASS/FAIL/NA)
+ITEMS 152-157 (Under Carriage → PASS/FAIL/NA)
+ITEMS 158-161 (Test Drive → EXCELLENT/GOOD/FAIR/POOR)
+ITEMS 162-167 (Brakes → PASS/FAIL/NA)
+ITEMS 168-170 (Diagnostics → PASS/FAIL/NA)
+ITEM 171 (Overall → EXCELLENT/GOOD/FAIR/POOR)
+ITEM 172 (Frame Damage → YES/NO/NA)
+ITEM 173 (Flood Damage → YES/NO/NA)
 
-For notes on any item: include "note_N": "text of their note"
+Notes: "note_N": "text of their handwritten note"
+Header: "s_iname", "s_date", "vin", "odo", "make_model", "client", "sales_rep", "dealership", "address", "extra_notes"
+Customer concerns (page 7): "concern_1" through "concern_5"
 
-Example format:
-{"item_1_OK": true, "note_1": "no wind noise", "item_4_PASS": true, "item_126_YES": true, "note_126": "small leak at front", "item_64_PASS": true}
+Example output:
+{"item_1_OK": true, "note_1": "no wind noise", "item_126_YES": true, "note_126": "small leak", "s_iname": "John", "vin": "1HGCM82633A004352"}
 
-Header information at the top of the form:
-- "s_iname": "inspector name"
-- "s_date": "date of inspection"
-- "vin": "VIN number"
-- "odo": "odometer reading"
-- "make_model": "make and model"
-- "client": "client name"
-- "sales_rep": "sales rep name"
-- "dealership": "dealership name"
-- "address": "address"
-- "extra_notes": "any overall notes at the bottom"
-
-Customer main concerns (page 7):
-- "concern_1": "first concern"
-- "concern_2": "second concern"
-- etc. up to "concern_5"
-
-Please analyze the handwriting. For any item you can read, output the corresponding JSON keys.
-For items you cannot see in the image, or that are left blank, do NOT include them.
-
-ONLY output valid JSON. Do not use markdown code blocks like ```json, just output the raw JSON object.
+Look at every image page by page. Do not skip any. Output only valid JSON.
 """
 
 @app.post("/api/process-inspection")
@@ -147,14 +126,13 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             ct = (orig_ct or "image/png").lower().replace("image/jpg", "image/jpeg")
             try:
                 img = Image.open(BytesIO(data))
-                # Resize to max 1600px on longest side to save tokens
                 w, h = img.size
-                if max(w, h) > 1600:
-                    ratio = 1600 / max(w, h)
+                if max(w, h) > 2400:
+                    ratio = 2400 / max(w, h)
                     img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
                 buf = BytesIO()
-                img.save(buf, format="JPEG", quality=85)
-                return buf.getvalue(), "image/jpeg"
+                img.save(buf, format="PNG")
+                return buf.getvalue(), "image/png"
             except Exception:
                 return data, ct
 
