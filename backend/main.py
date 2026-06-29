@@ -1,4 +1,4 @@
-import os, json
+import os, json, re
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
@@ -56,52 +56,87 @@ def get_quota():
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
 PROMPT = """
-You are transcribing a 173-point vehicle inspection form. I have attached MULTIPLE PHOTOS — reassemble them mentally into one form.
+You are reading a Texas 173-point vehicle inspection form from 7 photos. The photos may be in any order - reassemble them.
 
-CRITICAL RULE — DO NOT GUESS STATUS COLUMNS:
-For every item that has a mark (checkmark, X, circle, scribble, dot):
-1. Look at the row for that item number
-2. Find which COLUMN the mark falls in
-3. Read the COLUMN HEADER at the top of that column (e.g., "PASS", "FAIL", "OK", "WORKS", etc.)
-4. Use that column header to determine the correct JSON key
+For EACH item that has a mark (checkmark, X, circle, dot, scribble):
+- Look at which COLUMN the mark falls in
+- Read the COLUMN HEADER text from the form itself
+- Identify the ITEM NUMBER from the form
 
-A mark in the "PASS" column = item_N_PASS. A mark in the "FAIL" column = item_N_FAIL. The column headers are PRINTED on the form itself — read them from the image.
+Also read: header info, notes, and customer concerns.
 
-STRICT RULES:
-- Each item has at most ONE status marked. Output only that one.
-- If an item has a checkmark in the "OK" column but you also see a scribble in "PASS", the checkmark wins — use "OK".
-- Do NOT output false values. Do NOT output keys for blank items.
-- Every value must be `true` (boolean), never a string.
-- If you cannot clearly see which column is marked, SKIP that item.
+Output each finding on ONE LINE using this exact format (pipe-separated):
 
-Column headers per section (read these from the form, not from memory):
+For items with a mark: item_NUMBER|COLUMN_HEADER|optional notes
+For header fields: header|FIELD_NAME|value
+For concerns: concern|NUMBER|text
 
-ITEMS 1-8 (Interior): OK, PASS, FAIL
-ITEMS 9-24 (Seats & Carpet): PASS, BLEMISH, DIRTY
-ITEMS 25-63 (Electrical): WORKS, BROKEN, CRACKED
-ITEMS 64-83 (Dashboard & Safety): PASS, FAIL, NA
-ITEMS 84-101 (Exterior): OK, SCRATCH, DING, CHIP, RUST, DENT
-ITEMS 102-113 (Glass): OK, CHIP, SCRATCH, CRACKED
-ITEMS 114-116 (Mirrors): OK, CHIPS, CRACK, HAZY, MISSING
-ITEMS 117-124 (Tires): EXCELLENT, GOOD, FAIR, POOR
-ITEMS 125-146 (Under Hood): NO, YES, NA
-ITEMS 147-151 (Suspension): PASS, FAIL, NA
-ITEMS 152-157 (Under Carriage): PASS, FAIL, NA
-ITEMS 158-161 (Test Drive): EXCELLENT, GOOD, FAIR, POOR
-ITEMS 162-167 (Brakes): PASS, FAIL, NA
-ITEMS 168-170 (Diagnostics): PASS, FAIL, NA
-ITEM 171 (Overall): EXCELLENT, GOOD, FAIR, POOR
-ITEM 172 (Frame Damage): YES, NO, NA
-ITEM 173 (Flood Damage): YES, NO, NA
+COLUMN_HEADER is the PRINTED text at the top of the column where the mark is.
+FIELD_NAME is one of: s_iname, s_date, vin, odo, make_model, client, sales_rep, dealership, address
 
-Notes: "note_N": "handwritten note text"
-Header fields: s_iname, s_date, vin, odo, make_model, client, sales_rep, dealership, address, extra_notes
-Concerns (page 7): concern_1 through concern_5
+EXAMPLES:
+item_1|OK|no wind noise
+item_2|FAIL|
+item_126|YES|small leak at front
+header|vin|1HGCM82633A004352
+concern|1|engine vibration at idle
 
-Example: {"item_1_OK": true, "note_1": "no wind noise", "item_126_YES": true, "note_126": "small leak"}
-
-Output only valid JSON. Go through every image page by page.
+RULES:
+- Only output lines for items that have a mark. Skip blank items.
+- If you cannot clearly see which column header applies, SKIP the item.
+- Read the column header FROM THE FORM IMAGE - do not guess.
+- Do NOT wrap in code blocks or add extra text. Just the pipe-delimited lines.
 """
+
+VALID_COLUMNS = {
+    "OK", "PASS", "FAIL", "WORKS", "BROKEN", "CRACKED",
+    "BLEMISH", "DIRTY", "NA", "YES", "NO",
+    "SCRATCH", "DING", "CHIP", "RUST", "DENT",
+    "CHIPS", "CRACK", "HAZY", "MISSING",
+    "EXCELLENT", "GOOD", "FAIR", "POOR",
+}
+
+HEADER_FIELDS = {"s_iname", "s_date", "vin", "odo", "make_model", "client", "sales_rep", "dealership", "address", "extra_notes"}
+
+def parse_ai_output(text):
+    result = {}
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line or line.startswith('#') or line.startswith('//'):
+            continue
+        parts = [p.strip() for p in line.split('|')]
+
+        if len(parts) >= 2 and parts[0].startswith('item_'):
+            try:
+                item_num = int(parts[0].split('_')[1])
+                if item_num < 1 or item_num > 173:
+                    continue
+            except (ValueError, IndexError):
+                continue
+            status = parts[1].upper().replace('.', '').strip()
+            if status in VALID_COLUMNS:
+                result[f"item_{item_num}_{status}"] = True
+            if len(parts) >= 3 and parts[2]:
+                result[f"note_{item_num}"] = parts[2].strip()
+
+        elif len(parts) == 3 and parts[0].lower() == 'header':
+            field = parts[1].strip().lower().replace(' ', '_')
+            if field in HEADER_FIELDS or field == 'inspector_name':
+                mapped = 's_iname' if field in ('inspector_name', 'inspector') else field
+                result[mapped] = parts[2].strip()
+
+        elif len(parts) >= 2 and parts[0].lower() == 'header':
+            result[parts[1].strip().lower()] = parts[2].strip() if len(parts) > 2 else ''
+
+        elif len(parts) == 3 and parts[0].lower() == 'concern':
+            try:
+                cn = int(parts[1]) if parts[1].isdigit() else 0
+                if 1 <= cn <= 5:
+                    result[f"concern_{cn}"] = parts[2].strip()
+            except ValueError:
+                pass
+
+    return result
 
 @app.post("/api/process-inspection")
 async def process_inspection(files: List[UploadFile] = File(...)):
@@ -185,25 +220,14 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                         all_errors.append((model_name, type(e).__name__, err_str))
                         continue
                 if response:
-                    text = response.text.strip()
-                    print(f"  RAW RESPONSE ({model_name}): {text[:500]}")
-                    if text.startswith("```json"): text = text[7:]
-                    elif text.startswith("```"): text = text[3:]
-                    if text.endswith("```"): text = text[:-3]
-                    text = text.strip()
-                    # Try to extract JSON object from any surrounding text
-                    start = text.find("{")
-                    end = text.rfind("}")
-                    if start != -1 and end != -1 and end > start:
-                        text = text[start:end+1]
-                    try:
-                        extracted_json = json.loads(text)
-                        model_used = model_name
-                        break
-                    except json.JSONDecodeError as je:
-                        print(f"  JSON ERROR from {model_name}: {text[:300]}")
-                        all_errors.append((model_name, "JSONDecodeError", text[:100]))
-                        continue
+                    raw = response.text.strip()
+                    print(f"  RAW ({model_name}): {raw[:600]}")
+                    if raw.startswith("```"): raw = raw[3:]
+                    if raw.endswith("```"): raw = raw[:-3]
+                    raw = raw.strip()
+                    extracted_json = parse_ai_output(raw)
+                    model_used = model_name
+                    break
 
             if model_used:
                 n = sum(1 for k in extracted_json if k.startswith("item_"))
