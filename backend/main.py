@@ -140,7 +140,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 return data, ct
 
         try:
-            client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
+            client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
 
             # Read and normalize all images first
             image_parts = []
