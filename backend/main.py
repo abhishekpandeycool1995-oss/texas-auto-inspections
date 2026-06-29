@@ -55,28 +55,26 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-PROMPT = """
-Look at these 7 photos of a Texas 173-point vehicle inspection checklist.
+PROMPT = """7 photos of a Texas 173-point inspection checklist.
 
-For EACH item number (1-173) that has a handwritten mark:
-- Tell me which COLUMN the mark is in by naming the column header text printed on the form (like "OK", "PASS", "FAIL", "WORKS", "BROKEN", etc.)
-- Tell me the item number
-- Tell me any handwritten notes
+For EVERY numbered item (1-173) that has a handwritten mark:
+- Output the item number
+- Name the column header where the mark is (e.g. OK, PASS, FAIL, WORKS, BROKEN, etc.)
+- Include any handwritten notes
 
-IMPORTANT: Read the column header DIRECTLY from the form image. Look at the top of each column where the printed header text is.
+Format: item_NUMBER | COLUMN_HEADER | optional_notes
 
-Output each item as: item_NUMBER | COLUMN_HEADER_TEXT | optional_notes
-
-Also output header info and concerns in the same format:
+Also read header info and customer concerns:
 header | FIELD_NAME | value
 concern | NUMBER | text
 
-Example:
-item_1 | OK | no wind noise
-item_2 | PASS | 
-header | vin | 1HGCM82633A004352
+Examples:
+item_1|OK|no wind noise
+item_2|PASS|
+header|vin|1HGCM82633A004352
+concern|1|engine vibration
 
-Do not output any other text besides these pipe-delimited lines.
+Output ONLY pipe-delimited lines. No introductions or explanations.
 """
 
 VALID_COLUMNS = {
@@ -185,7 +183,6 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                             contents=image_parts + [PROMPT],
                             config=types.GenerateContentConfig(
                                 temperature=0.1,
-                                max_output_tokens=4096,
                             )
                         )
                         print(f"  {model_name} OK")
@@ -208,7 +205,10 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                         continue
                 if response:
                     raw = response.text.strip()
-                    print(f"  RAW ({model_name}): {raw[:600]}")
+                    lines_count = len([l for l in raw.split('\n') if '|' in l])
+                    print(f"  RAW ({model_name}): {len(raw)} chars, {lines_count} lines")
+                    print(f"  RAW FIRST 300: {raw[:300]}")
+                    print(f"  RAW LAST 300: {raw[-300:]}")
                     if raw.startswith("```"): raw = raw[3:]
                     if raw.endswith("```"): raw = raw[:-3]
                     raw = raw.strip()
