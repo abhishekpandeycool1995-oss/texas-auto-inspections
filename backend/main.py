@@ -208,7 +208,9 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 err_msg = str(last_error) if last_error else "unknown"
                 summary = f"All models failed. Last: {err_msg}"
                 if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
-                    summary += " — API key rate limited. Wait ~1 min or use a paid key."
+                    summary += " — Free tier quota exhausted (20 requests/day for gemini-2.5-flash). Get a fresh AIzaSy API key from https://aistudio.google.com/apikey or wait ~24h."
+                elif "quota" in err_msg.lower():
+                    summary += " — API quota exceeded. Get a fresh AIzaSy key from https://aistudio.google.com/apikey"
                 raise HTTPException(status_code=429, detail=summary)
             print(f"Total: {len(extracted_json)} keys")
         except HTTPException:
