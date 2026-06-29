@@ -190,7 +190,12 @@ generateBtn.addEventListener('click', async () => {
         a.click();
         window.URL.revokeObjectURL(url);
 
-        showStatus('Success! Your PDF has been generated.', 'success');
+        const warning = response.headers.get('X-Warning');
+        if (warning) {
+            showStatus(warning, 'warning');
+        } else {
+            showStatus('Success! Your PDF has been generated.', 'success');
+        }
     } catch (error) {
         showStatus(error.message, 'error');
     } finally {

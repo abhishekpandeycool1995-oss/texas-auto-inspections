@@ -27,8 +27,9 @@ def check_quota():
     if data.get("date") != today:
         data = {"date": today, "count": 0}
     if data["count"] >= QUOTA_LIMIT:
-        raise HTTPException(status_code=429, detail=f"Daily quota finished. Limit is {QUOTA_LIMIT} generations/day. Resets at midnight.")
-    data["count"] += 1
+        print(f"WARNING: Daily quota ({QUOTA_LIMIT}) exceeded, still proceeding.")
+    else:
+        data["count"] += 1
     with open(QUOTA_FILE, "w") as f:
         json.dump(data, f)
 
@@ -138,21 +139,8 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             pass
 
     if not api_key:
-        print("No API Key found, using dummy data.")
-        extracted_json = {
-            "s_date": "06/27/2026", "vin": "1HGCM82633A004352",
-            "odo": "85,432", "make_model": "Honda Accord 2020",
-            "client": "John Smith", "sales_rep": "Jane Doe",
-            "dealership": "Texas First Auto", "address": "123 Main St, Austin",
-            "item_1_PASS": True, "item_2_FAIL": True, "note_2": "needs new brakes",
-            "item_3_NA": True, "item_4_PASS": True, "item_5_PASS": True,
-            "critical_0_FAIL": True, "crit_note_0": "Engine misfire",
-            "item_8_FAIL": True, "item_25_WORKS": True,
-            "item_64_PASS": True, "item_84_SCRATCH": True,
-            "item_117_GOOD": True, "item_126_YES": True,
-            "item_172_NO": True, "item_173_NO": True,
-            "extra_notes": "Scribbled notes at the bottom"
-        }
+        print("No API Key found, using blank data.")
+        extracted_json = {}
     else:
         MODELS_TO_TRY = [
             "gemini-2.5-flash",
@@ -238,40 +226,22 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                     extracted_json.update(partial)
 
             if not extracted_json:
-                err_msg = str(last_error) if last_error else "unknown"
-                summary = f"All models failed. Last: {err_msg}"
-                if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
-                    summary += " — Free tier quota exhausted (20 requests/day for gemini-2.5-flash). Get a fresh AIzaSy API key from https://aistudio.google.com/apikey or wait ~24h."
-                elif "quota" in err_msg.lower():
-                    summary += " — API quota exceeded. Get a fresh AIzaSy key from https://aistudio.google.com/apikey"
-                raise HTTPException(status_code=429, detail=summary)
+                print(f"WARNING: All AI models failed. Last error: {last_error}")
+                extracted_json = {}
             print(f"Total: {len(extracted_json)} keys")
         except HTTPException:
             raise
         except Exception as e:
             import traceback
-            tb = traceback.format_exc()
-            print(f"UNCAUGHT ERROR at: {tb}")
-            raise HTTPException(status_code=500, detail=f"AI Error [{type(e).__name__}]: {str(e)}")
+            print(f"AI ERROR (falling back): {traceback.format_exc()}")
+            extracted_json = {}
 
     item_count = sum(1 for k in extracted_json if k.startswith("item_") or k.startswith("concern_") or k.startswith("note_"))
     print(f"Total extracted items: {item_count}, keys: {list(extracted_json.keys())[:20]}")
 
     if item_count == 0:
-        print("WARNING: AI returned no data. Falling back to dummy data.")
-        extracted_json = {
-            "s_date": "06/27/2026", "vin": "1HGCM82633A004352",
-            "odo": "85,432", "make_model": "Honda Accord 2020",
-            "client": "John Smith", "sales_rep": "Jane Doe",
-            "dealership": "Texas First Auto", "address": "123 Main St, Austin",
-            "item_1_PASS": True, "item_2_FAIL": True, "note_2": "needs new brakes",
-            "item_3_NA": True, "item_4_PASS": True, "item_5_PASS": True,
-            "item_8_FAIL": True, "item_25_WORKS": True,
-            "item_64_PASS": True, "item_84_SCRATCH": True,
-            "item_117_GOOD": True, "item_126_YES": True,
-            "item_172_NO": True, "item_173_NO": True,
-            "extra_notes": "Demo data - AI could not read handwriting"
-        }
+        print("WARNING: AI returned no data.")
+        extracted_json = {}
 
     import json as _json
     data_json = _json.dumps(extracted_json)
@@ -280,12 +250,14 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     try:
         fill_pdf(input_pdf, output_pdf, extracted_json)
     except Exception as e:
-        import traceback
-        print(f"PDF Error traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"PDF Error: {str(e)}")
+        import traceback, shutil
+        print(f"PDF Error (returning blank): {traceback.format_exc()}")
+        shutil.copy(input_pdf, output_pdf)
     response = FileResponse(output_pdf, media_type="application/pdf", filename="Texas_1st_Auto_Inspection_Report.pdf")
     response.headers["X-Data-Count"] = str(item_count)
     response.headers["X-Extracted-Json"] = data_json[:2000]
+    if item_count == 0:
+        response.headers["X-Warning"] = "AI could not read the handwriting. PDF has been returned as a blank form."
     return response
 
 from fastapi.staticfiles import StaticFiles

@@ -212,6 +212,12 @@ header p {
     border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
+.status-warning {
+    background: rgba(251, 191, 36, 0.1);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.2);
+}
+
 .preview-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
