@@ -124,11 +124,11 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             try:
                 img = Image.open(BytesIO(data))
                 w, h = img.size
-                if max(w, h) > 1200:
-                    ratio = 1200 / max(w, h)
+                if max(w, h) > 2000:
+                    ratio = 2000 / max(w, h)
                     img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
                 buf = BytesIO()
-                img.save(buf, format="JPEG", quality=80)
+                img.save(buf, format="JPEG", quality=90)
                 return buf.getvalue(), "image/jpeg"
             except Exception:
                 return data, ct
