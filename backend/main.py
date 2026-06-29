@@ -133,14 +133,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     api_key = os.environ.get("GEMINI_API_KEY")
     last_error = None
     if not api_key:
-        try:
-            with open(os.path.join(os.path.dirname(__file__), "..", "api_key.txt"), "r") as f:
-                api_key = f.read().strip()
-        except:
-            pass
-
-    if not api_key:
-        print("No API Key found, using blank data.")
+        print("No API key set. Set GEMINI_API_KEY environment variable.")
         extracted_json = {}
     else:
         MODELS_TO_TRY = [
