@@ -56,54 +56,51 @@ def get_quota():
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
 PROMPT = """
-You are an expert forensic handwriting transcriber for a vehicle inspection form. You will receive MULTIPLE PHOTOS of a single 173-point inspection checklist. They may be in any order — reassemble them mentally.
+You are transcribing a 173-point vehicle inspection form. I have attached MULTIPLE PHOTOS — reassemble them mentally into one form.
 
-Your task: For EACH item, identify WHICH COLUMN was ticked/marked. Look at the checkmark, circle, X, or scribble and determine which column it falls in. The columns are left to right.
+CRITICAL RULE — DO NOT GUESS STATUS COLUMNS:
+For every item that has a mark (checkmark, X, circle, scribble, dot):
+1. Look at the row for that item number
+2. Find which COLUMN the mark falls in
+3. Read the COLUMN HEADER at the top of that column (e.g., "PASS", "FAIL", "OK", "WORKS", etc.)
+4. Use that column header to determine the correct JSON key
 
-IMPORTANT: Get the status column RIGHT. A mark in the "PASS" column means item_N_PASS. A mark in the "FAIL" column means item_N_FAIL.
+A mark in the "PASS" column = item_N_PASS. A mark in the "FAIL" column = item_N_FAIL. The column headers are PRINTED on the form itself — read them from the image.
 
-JSON rules:
-- Output ONLY the ONE status key that is marked per item. No false values.
-- Each value MUST be `true` (boolean), NOT a string.
-- Leave blank/unmarked items out entirely.
+STRICT RULES:
+- Each item has at most ONE status marked. Output only that one.
+- If an item has a checkmark in the "OK" column but you also see a scribble in "PASS", the checkmark wins — use "OK".
+- Do NOT output false values. Do NOT output keys for blank items.
+- Every value must be `true` (boolean), never a string.
+- If you cannot clearly see which column is marked, SKIP that item.
 
-Key formats by section (choose the right column):
+Column headers per section (read these from the form, not from memory):
 
-ITEMS 1-8 (Interior) columns: [OK] [PASS] [FAIL]
-  "item_1_OK": true | "item_1_PASS": true | "item_1_FAIL": true
+ITEMS 1-8 (Interior): OK, PASS, FAIL
+ITEMS 9-24 (Seats & Carpet): PASS, BLEMISH, DIRTY
+ITEMS 25-63 (Electrical): WORKS, BROKEN, CRACKED
+ITEMS 64-83 (Dashboard & Safety): PASS, FAIL, NA
+ITEMS 84-101 (Exterior): OK, SCRATCH, DING, CHIP, RUST, DENT
+ITEMS 102-113 (Glass): OK, CHIP, SCRATCH, CRACKED
+ITEMS 114-116 (Mirrors): OK, CHIPS, CRACK, HAZY, MISSING
+ITEMS 117-124 (Tires): EXCELLENT, GOOD, FAIR, POOR
+ITEMS 125-146 (Under Hood): NO, YES, NA
+ITEMS 147-151 (Suspension): PASS, FAIL, NA
+ITEMS 152-157 (Under Carriage): PASS, FAIL, NA
+ITEMS 158-161 (Test Drive): EXCELLENT, GOOD, FAIR, POOR
+ITEMS 162-167 (Brakes): PASS, FAIL, NA
+ITEMS 168-170 (Diagnostics): PASS, FAIL, NA
+ITEM 171 (Overall): EXCELLENT, GOOD, FAIR, POOR
+ITEM 172 (Frame Damage): YES, NO, NA
+ITEM 173 (Flood Damage): YES, NO, NA
 
-ITEMS 9-24 (Seats & Carpet) columns: [PASS] [BLEMISH] [DIRTY]
-  "item_9_PASS": true | "item_9_BLEMISH": true | "item_9_DIRTY": true
+Notes: "note_N": "handwritten note text"
+Header fields: s_iname, s_date, vin, odo, make_model, client, sales_rep, dealership, address, extra_notes
+Concerns (page 7): concern_1 through concern_5
 
-ITEMS 25-63 (Electrical) columns: [WORKS] [BROKEN] [CRACKED]
-  "item_25_WORKS": true | "item_25_BROKEN": true | "item_25_CRACKED": true
+Example: {"item_1_OK": true, "note_1": "no wind noise", "item_126_YES": true, "note_126": "small leak"}
 
-ITEMS 64-83 (Dashboard & Safety) columns: [PASS] [FAIL] [NA]
-  "item_64_PASS": true | "item_64_FAIL": true | "item_64_NA": true
-
-ITEMS 84-101 (Exterior) columns: [OK] [SCRATCH] [DING] [CHIP] [RUST] [DENT]
-  "item_84_OK": true | "item_84_SCRATCH": true | etc.
-
-ITEMS 102-113 (Glass): [OK] [CHIP] [SCRATCH] [CRACKED]
-ITEMS 114-116 (Mirrors): [OK] [CHIPS] [CRACK] [HAZY] [MISSING]
-ITEMS 117-124 (Tires): [EXCELLENT] [GOOD] [FAIR] [POOR]
-ITEMS 125-146 (Under Hood): [NO] [YES] [NA]
-ITEMS 147-151 (Suspension): [PASS] [FAIL] [NA]
-ITEMS 152-157 (Under Carriage): [PASS] [FAIL] [NA]
-ITEMS 158-161 (Test Drive): [EXCELLENT] [GOOD] [FAIR] [POOR]
-ITEMS 162-167 (Brakes): [PASS] [FAIL] [NA]
-ITEMS 168-170 (Diagnostics): [PASS] [FAIL] [NA]
-ITEM 171 (Overall): [EXCELLENT] [GOOD] [FAIR] [POOR]
-ITEM 172 (Frame Damage): [YES] [NO] [NA]
-ITEM 173 (Flood Damage): [YES] [NO] [NA]
-
-Notes on any item: use "note_N": "their handwritten note"
-Header info: "s_iname", "s_date", "vin", "odo", "make_model", "client", "sales_rep", "dealership", "address", "extra_notes"
-Customer concerns (page 7): "concern_1" through "concern_5"
-
-Example: {"item_1_OK": true, "note_1": "no wind noise", "item_126_YES": true, "note_126": "small leak", "s_iname": "John", "vin": "1HGCM82633A004352"}
-
-Look at every image page by page. Output only valid JSON.
+Output only valid JSON. Go through every image page by page.
 """
 
 @app.post("/api/process-inspection")
@@ -162,7 +159,11 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                         print(f"  Trying {model_name} (attempt {attempt+1}/5) with {len(image_parts)} images")
                         response = client.models.generate_content(
                             model=model_name,
-                            contents=image_parts + [PROMPT]
+                            contents=image_parts + [PROMPT],
+                            config=types.GenerateContentConfig(
+                                temperature=0.0,
+                                max_output_tokens=4096,
+                            )
                         )
                         print(f"  {model_name} OK")
                         break
