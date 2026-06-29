@@ -130,12 +130,12 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             try:
                 img = Image.open(BytesIO(data))
                 w, h = img.size
-                if max(w, h) > 2400:
-                    ratio = 2400 / max(w, h)
+                if max(w, h) > 1800:
+                    ratio = 1800 / max(w, h)
                     img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
                 buf = BytesIO()
-                img.save(buf, format="PNG")
-                return buf.getvalue(), "image/png"
+                img.save(buf, format="JPEG", quality=90)
+                return buf.getvalue(), "image/jpeg"
             except Exception:
                 return data, ct
 
@@ -181,14 +181,6 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                             last_error = (model_name, type(e).__name__, err_str)
                             continue
                         if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                            import re
-                            m = re.search(r'retry in (\d+(?:\.\d+)?)s', err_str, re.I)
-                            if m and attempt < 4:
-                                delay = float(m.group(1)) + 2
-                                print(f"  {model_name} rate limited, waiting {delay:.0f}s (attempt {attempt+1}/5)...")
-                                time.sleep(min(delay, 65))
-                                last_error = (model_name, type(e).__name__, err_str)
-                                continue
                             print(f"  {model_name} quota exhausted, trying next model...")
                             last_error = (model_name, type(e).__name__, err_str)
                             break
