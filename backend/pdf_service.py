@@ -131,7 +131,6 @@ def draw_editable_text(page, x, y, text, field_name, fontsize=7.5, width=160):
     if not text or not text.strip():
         return
     text = text.strip()
-    page.insert_text((x, y - 3), text, fontsize=fontsize, color=(0, 0, 0), fontname="helv")
     try:
         tw = min(width, len(text) * fontsize * 0.5 + 6)
         w = fitz.Widget()
