@@ -56,49 +56,72 @@ def get_quota():
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
 PROMPT = """
-You are reading a Texas 173-point vehicle inspection form from 7 photos. The photos may be in any order - reassemble them.
+You are reading a Texas 173-point vehicle inspection form from 7 photos. The photos show different pages of ONE form.
 
-For EACH item that has a mark (checkmark, X, circle, dot, scribble):
-- Look at which COLUMN the mark falls in
-- Read the COLUMN HEADER text from the form itself
-- Identify the ITEM NUMBER from the form
+For each row/item that has a handwritten mark (checkmark, X, circle, scribble, dot):
+- Look at the item number on the left
+- Look at the mark
+- COUNT which column the mark is in, starting from the LEFT as column 1
+- Read any handwritten notes in the notes column
 
-Also read: header info, notes, and customer concerns.
+Also read: header info at the top, and customer concerns on page 7.
 
-Output each finding on ONE LINE using this exact format (pipe-separated):
+Output each finding on ONE line using this format:
 
-For items with a mark: item_NUMBER|COLUMN_HEADER|optional notes
-For header fields: header|FIELD_NAME|value
+item_N|COLUMN_POSITION|optional notes
+
+COLUMN_POSITION is the column number counting from the left (1, 2, 3, 4, 5, or 6).
+For headers: header|FIELD_NAME|value
 For concerns: concern|NUMBER|text
 
-COLUMN_HEADER is the PRINTED text at the top of the column where the mark is.
 FIELD_NAME is one of: s_iname, s_date, vin, odo, make_model, client, sales_rep, dealership, address
 
 EXAMPLES:
-item_1|OK|no wind noise
-item_2|FAIL|
-item_126|YES|small leak at front
+item_1|1|no wind noise
+item_2|3|
 header|vin|1HGCM82633A004352
-concern|1|engine vibration at idle
+concern|1|engine vibration
 
 RULES:
-- Only output lines for items that have a mark. Skip blank items.
-- If you cannot clearly see which column header applies, SKIP the item.
-- Read the column header FROM THE FORM IMAGE - do not guess.
-- Do NOT wrap in code blocks or add extra text. Just the pipe-delimited lines.
+- Column 1 is the LEFTMOST column. Column 2 is the next one to the right. And so on.
+- Only output lines for items that have a mark. Skip blank rows.
+- If you cannot see which column the mark is in, skip that item.
+- Do NOT guess column names. Count positions from left.
+- No code blocks or extra text.
 """
 
-VALID_COLUMNS = {
-    "OK", "PASS", "FAIL", "WORKS", "BROKEN", "CRACKED",
-    "BLEMISH", "DIRTY", "NA", "YES", "NO",
-    "SCRATCH", "DING", "CHIP", "RUST", "DENT",
-    "CHIPS", "CRACK", "HAZY", "MISSING",
-    "EXCELLENT", "GOOD", "FAIR", "POOR",
+POSITION_WORDS = {
+    "1": 0, "1st": 0, "first": 0, "one": 0,
+    "2": 1, "2nd": 1, "second": 1, "two": 1,
+    "3": 2, "3rd": 2, "third": 2, "three": 2,
+    "4": 3, "4th": 3, "fourth": 3, "four": 3,
+    "5": 4, "5th": 4, "fifth": 4, "five": 4,
+    "6": 5, "6th": 5, "sixth": 5, "six": 5,
 }
 
-HEADER_FIELDS = {"s_iname", "s_date", "vin", "odo", "make_model", "client", "sales_rep", "dealership", "address", "extra_notes"}
+def get_item_section(item_num):
+    if 1 <= item_num <= 8: return "interior"
+    if 9 <= item_num <= 24: return "seats"
+    if 25 <= item_num <= 63: return "electrical"
+    if 64 <= item_num <= 78: return "dashboard"
+    if 79 <= item_num <= 83: return "safety"
+    if 84 <= item_num <= 101: return "exterior"
+    if 102 <= item_num <= 113: return "glass"
+    if 114 <= item_num <= 116: return "mirrors"
+    if 117 <= item_num <= 124: return "tires"
+    if 125 <= item_num <= 146: return "underhood"
+    if 147 <= item_num <= 151: return "suspension"
+    if 152 <= item_num <= 157: return "undercarriage"
+    if 158 <= item_num <= 161: return "testdrive"
+    if 162 <= item_num <= 167: return "brake"
+    if 168 <= item_num <= 170: return "diagnostics"
+    if item_num == 171: return "overall"
+    if item_num == 172: return "framedamage"
+    if item_num == 173: return "flooddamage"
+    return None
 
 def parse_ai_output(text):
+    from backend.pdf_service import SECTION_COLUMNS
     result = {}
     for line in text.split('\n'):
         line = line.strip()
@@ -113,24 +136,26 @@ def parse_ai_output(text):
                     continue
             except (ValueError, IndexError):
                 continue
-            status = parts[1].upper().replace('.', '').strip()
-            if status in VALID_COLUMNS:
-                result[f"item_{item_num}_{status}"] = True
+            pos_str = parts[1].lower().strip().rstrip('.')
+            section = get_item_section(item_num)
+            if section is None:
+                continue
+            cols = SECTION_COLUMNS.get(section, {})
+            col_list = list(cols.keys())
+            col_idx = POSITION_WORDS.get(pos_str, -1)
+            if 0 <= col_idx < len(col_list):
+                result[f"item_{item_num}_{col_list[col_idx]}"] = True
             if len(parts) >= 3 and parts[2]:
                 result[f"note_{item_num}"] = parts[2].strip()
 
         elif len(parts) == 3 and parts[0].lower() == 'header':
             field = parts[1].strip().lower().replace(' ', '_')
-            if field in HEADER_FIELDS or field == 'inspector_name':
-                mapped = 's_iname' if field in ('inspector_name', 'inspector') else field
-                result[mapped] = parts[2].strip()
-
-        elif len(parts) >= 2 and parts[0].lower() == 'header':
-            result[parts[1].strip().lower()] = parts[2].strip() if len(parts) > 2 else ''
+            if field in ('s_iname', 's_date', 'vin', 'odo', 'make_model', 'client', 'sales_rep', 'dealership', 'address', 'extra_notes'):
+                result[field] = parts[2].strip()
 
         elif len(parts) == 3 and parts[0].lower() == 'concern':
             try:
-                cn = int(parts[1]) if parts[1].isdigit() else 0
+                cn = int(parts[1])
                 if 1 <= cn <= 5:
                     result[f"concern_{cn}"] = parts[2].strip()
             except ValueError:
