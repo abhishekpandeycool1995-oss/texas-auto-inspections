@@ -137,9 +137,8 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         extracted_json = {}
     else:
         MODELS_TO_TRY = [
-            "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
-            "gemini-2.5-pro",
+            "gemini-2.5-flash",
         ]
 
         import time
@@ -148,9 +147,14 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             ct = (orig_ct or "image/png").lower().replace("image/jpg", "image/jpeg")
             try:
                 img = Image.open(BytesIO(data))
+                # Resize to max 1600px on longest side to save tokens
+                w, h = img.size
+                if max(w, h) > 1600:
+                    ratio = 1600 / max(w, h)
+                    img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
                 buf = BytesIO()
-                img.save(buf, format="PNG")
-                return buf.getvalue(), "image/png"
+                img.save(buf, format="JPEG", quality=85)
+                return buf.getvalue(), "image/jpeg"
             except Exception:
                 return data, ct
 
