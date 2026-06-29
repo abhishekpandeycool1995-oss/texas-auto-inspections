@@ -58,51 +58,52 @@ def get_quota():
 PROMPT = """
 You are an expert forensic handwriting transcriber for a vehicle inspection form. You will receive MULTIPLE PHOTOS of a single 173-point inspection checklist. They may be in any order — reassemble them mentally.
 
-Your task: transcribe EVERY item you can read, exactly as marked. Be thorough — look carefully at each image. If handwriting is unclear, make your best guess.
+Your task: For EACH item, identify WHICH COLUMN was ticked/marked. Look at the checkmark, circle, X, or scribble and determine which column it falls in. The columns are left to right.
+
+IMPORTANT: Get the status column RIGHT. A mark in the "PASS" column means item_N_PASS. A mark in the "FAIL" column means item_N_FAIL.
 
 JSON rules:
-- Output ONLY status keys that are TRUE/ticked/circled. No false values.
-- Each value MUST be `true` (boolean), NOT a string like "PASS".
-- For blank items, do NOT include them.
+- Output ONLY the ONE status key that is marked per item. No false values.
+- Each value MUST be `true` (boolean), NOT a string.
+- Leave blank/unmarked items out entirely.
 
-Key formats by section:
+Key formats by section (choose the right column):
 
-ITEMS 1-8 (Interior -> OK/PASS/FAIL):
-  "item_1_OK": true, "item_1_PASS": true, "item_1_FAIL": true
+ITEMS 1-8 (Interior) columns: [OK] [PASS] [FAIL]
+  "item_1_OK": true | "item_1_PASS": true | "item_1_FAIL": true
 
-ITEMS 9-24 (Seats & Carpet -> PASS/BLEMISH/DIRTY):
-  "item_9_PASS": true, "item_9_BLEMISH": true, "item_9_DIRTY": true
+ITEMS 9-24 (Seats & Carpet) columns: [PASS] [BLEMISH] [DIRTY]
+  "item_9_PASS": true | "item_9_BLEMISH": true | "item_9_DIRTY": true
 
-ITEMS 25-63 (Electrical -> WORKS/BROKEN/CRACKED):
-  "item_25_WORKS": true, "item_25_BROKEN": true, "item_25_CRACKED": true
+ITEMS 25-63 (Electrical) columns: [WORKS] [BROKEN] [CRACKED]
+  "item_25_WORKS": true | "item_25_BROKEN": true | "item_25_CRACKED": true
 
-ITEMS 64-83 (Dashboard & Safety -> PASS/FAIL/NA):
-  "item_64_PASS": true, "item_64_FAIL": true, "item_64_NA": true
+ITEMS 64-83 (Dashboard & Safety) columns: [PASS] [FAIL] [NA]
+  "item_64_PASS": true | "item_64_FAIL": true | "item_64_NA": true
 
-ITEMS 84-101 (Exterior -> OK/SCRATCH/DING/CHIP/RUST/DENT):
-  "item_84_OK": true, "item_84_SCRATCH": true
+ITEMS 84-101 (Exterior) columns: [OK] [SCRATCH] [DING] [CHIP] [RUST] [DENT]
+  "item_84_OK": true | "item_84_SCRATCH": true | etc.
 
-ITEMS 102-113 (Glass -> OK/CHIP/SCRATCH/CRACKED)
-ITEMS 114-116 (Mirrors -> OK/CHIPS/CRACK/HAZY/MISSING)
-ITEMS 117-124 (Tires -> EXCELLENT/GOOD/FAIR/POOR)
-ITEMS 125-146 (Under Hood -> NO/YES/NA)
-ITEMS 147-151 (Suspension -> PASS/FAIL/NA)
-ITEMS 152-157 (Under Carriage -> PASS/FAIL/NA)
-ITEMS 158-161 (Test Drive -> EXCELLENT/GOOD/FAIR/POOR)
-ITEMS 162-167 (Brakes -> PASS/FAIL/NA)
-ITEMS 168-170 (Diagnostics -> PASS/FAIL/NA)
-ITEM 171 (Overall -> EXCELLENT/GOOD/FAIR/POOR)
-ITEM 172 (Frame Damage -> YES/NO/NA)
-ITEM 173 (Flood Damage -> YES/NO/NA)
+ITEMS 102-113 (Glass): [OK] [CHIP] [SCRATCH] [CRACKED]
+ITEMS 114-116 (Mirrors): [OK] [CHIPS] [CRACK] [HAZY] [MISSING]
+ITEMS 117-124 (Tires): [EXCELLENT] [GOOD] [FAIR] [POOR]
+ITEMS 125-146 (Under Hood): [NO] [YES] [NA]
+ITEMS 147-151 (Suspension): [PASS] [FAIL] [NA]
+ITEMS 152-157 (Under Carriage): [PASS] [FAIL] [NA]
+ITEMS 158-161 (Test Drive): [EXCELLENT] [GOOD] [FAIR] [POOR]
+ITEMS 162-167 (Brakes): [PASS] [FAIL] [NA]
+ITEMS 168-170 (Diagnostics): [PASS] [FAIL] [NA]
+ITEM 171 (Overall): [EXCELLENT] [GOOD] [FAIR] [POOR]
+ITEM 172 (Frame Damage): [YES] [NO] [NA]
+ITEM 173 (Flood Damage): [YES] [NO] [NA]
 
-Notes: "note_N": "text of their handwritten note"
-Header: "s_iname", "s_date", "vin", "odo", "make_model", "client", "sales_rep", "dealership", "address", "extra_notes"
+Notes on any item: use "note_N": "their handwritten note"
+Header info: "s_iname", "s_date", "vin", "odo", "make_model", "client", "sales_rep", "dealership", "address", "extra_notes"
 Customer concerns (page 7): "concern_1" through "concern_5"
 
-Example output:
-{"item_1_OK": true, "note_1": "no wind noise", "item_126_YES": true, "note_126": "small leak", "s_iname": "John", "vin": "1HGCM82633A004352"}
+Example: {"item_1_OK": true, "note_1": "no wind noise", "item_126_YES": true, "note_126": "small leak", "s_iname": "John", "vin": "1HGCM82633A004352"}
 
-Look at every image page by page. Do not skip any. Output only valid JSON.
+Look at every image page by page. Output only valid JSON.
 """
 
 @app.post("/api/process-inspection")
