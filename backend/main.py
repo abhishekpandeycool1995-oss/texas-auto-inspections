@@ -55,27 +55,34 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-PROMPT = """7 photos of a Texas 173-point inspection checklist.
+PAGE_PROMPT_BODY = """One page of a Texas 173-point vehicle inspection form.
 
-For EVERY numbered item (1-173) that has a handwritten mark:
-- Output the item number
-- Name the column header where the mark is (e.g. OK, PASS, FAIL, WORKS, BROKEN, etc.)
-- Include any handwritten notes
+List EVERY item number visible that has a handwritten checkmark, X, or dot.
+For each item, say which column the mark is in by naming the column header printed at the top of the column (e.g. OK, PASS, FAIL, WORKS, BROKEN, etc.).
+Also include any handwritten notes.
 
-Format: item_NUMBER | COLUMN_HEADER | optional_notes
-
-Also read header info and customer concerns:
-header | FIELD_NAME | value
-concern | NUMBER | text
+Output each item as: item_NUMBER|COLUMN_HEADER|optional_notes
 
 Examples:
 item_1|OK|no wind noise
-item_2|PASS|
-header|vin|1HGCM82633A004352
-concern|1|engine vibration
+item_5|PASS|slight wear
 
-Output ONLY pipe-delimited lines. No introductions or explanations.
-"""
+Only output pipe-delimited lines. No introductions."""
+
+FIRST_PAGE_PROMPT = PAGE_PROMPT_BODY + """
+
+Also read the header fields at the TOP of this page:
+header|FIELD_NAME|value
+
+Field names: s_date, vin, odo, make_model, client, sales_rep, dealership, address
+Example: header|vin|1HGCM82633A004352"""
+
+LAST_PAGE_PROMPT = PAGE_PROMPT_BODY + """
+
+Also read any customer concerns at the bottom of this page:
+concern|NUMBER|text
+
+Example: concern|1|engine vibration"""
 
 VALID_COLUMNS = {
     "OK", "PASS", "FAIL", "WORKS", "BROKEN", "CRACKED",
@@ -85,11 +92,16 @@ VALID_COLUMNS = {
     "EXCELLENT", "GOOD", "FAIR", "POOR",
 }
 
+def merge_results(existing, new):
+    for k, v in new.items():
+        if k not in existing:
+            existing[k] = v
+
 def parse_ai_output(text):
     result = {}
     for line in text.split('\n'):
         line = line.strip()
-        if not line or line.startswith('#') or line.startswith('//') or '|' not in line:
+        if not line or '|' not in line:
             continue
         parts = [p.strip() for p in line.split('|')]
 
@@ -156,85 +168,87 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         try:
             client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
 
-            image_parts = []
-            for f in files:
+            # Read and normalize all photos
+            photo_data = []
+            for idx, f in enumerate(files):
                 try:
                     img_bytes = await f.read()
                 except Exception as e:
                     print(f"  READ ERROR for {f.filename}: {type(e).__name__}: {e}")
                     raise
-                print(f"Processing {f.filename}: {len(img_bytes)} bytes, content_type={f.content_type}")
+                print(f"Photo {idx+1} ({f.filename}): {len(img_bytes)} bytes, {f.content_type}")
                 try:
                     image_data, mime_type = normalize_image(img_bytes, f.content_type)
                 except Exception as e:
                     print(f"NORMALIZE ERROR for {f.filename}: {type(e).__name__}: {e}")
                     raise
-                image_parts.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
+                photo_data.append((image_data, mime_type, f.filename))
 
             extracted_json = {}
-            model_used = None
-            for model_name in MODELS_TO_TRY:
-                response = None
-                for attempt in range(5):
-                    try:
-                        print(f"  Trying {model_name} (attempt {attempt+1}/5) with {len(image_parts)} images")
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=image_parts + [PROMPT],
-                            config=types.GenerateContentConfig(
-                                temperature=0.1,
-                            )
-                        )
-                        print(f"  {model_name} OK")
-                        break
-                    except HTTPException:
-                        raise
-                    except Exception as e:
-                        err_str = str(e)
-                        if "503" in err_str or "UNAVAILABLE" in err_str:
-                            print(f"  {model_name} overloaded, retrying in {2**attempt}s...")
-                            time.sleep(2 ** attempt)
-                            all_errors.append((model_name, type(e).__name__, err_str))
-                            continue
-                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                            print(f"  {model_name} quota exhausted, trying next model...")
-                            all_errors.append((model_name, type(e).__name__, err_str))
-                            break
-                        print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
-                        all_errors.append((model_name, type(e).__name__, err_str))
-                        continue
-                if response:
-                    raw = response.text.strip()
-                    lines_count = len([l for l in raw.split('\n') if '|' in l])
-                    print(f"  RAW ({model_name}): {len(raw)} chars, {lines_count} lines")
-                    print(f"  RAW FIRST 300: {raw[:300]}")
-                    print(f"  RAW LAST 300: {raw[-300:]}")
-                    if raw.startswith("```"): raw = raw[3:]
-                    if raw.endswith("```"): raw = raw[:-3]
-                    raw = raw.strip()
-                    extracted_json = parse_ai_output(raw)
-                    model_used = model_name
-                    if not any(k.startswith("item_") for k in extracted_json):
-                        all_errors.append((model_name, "ZERO_ITEMS", raw[:300]))
-                        print(f"  {model_name} returned 0 items, trying next...")
-                        continue
-                    break
+            total_photos = len(photo_data)
 
-            if model_used:
-                n = sum(1 for k in extracted_json if k.startswith("item_"))
-                print(f"  {model_used}: {n} items, {len(extracted_json)} keys")
-            else:
-                print(f"WARNING: All AI models failed. Errors: {[m for m,_,_ in all_errors]}")
-                extracted_json = {}
+            for idx, (image_data, mime_type, filename) in enumerate(photo_data):
+                if idx == 0 and total_photos > 0:
+                    prompt = FIRST_PAGE_PROMPT
+                elif idx == total_photos - 1 and total_photos > 1:
+                    prompt = LAST_PAGE_PROMPT
+                else:
+                    prompt = PAGE_PROMPT_BODY
+
+                print(f"  Processing photo {idx+1}/{total_photos} ({filename})")
+
+                success = False
+                for model_name in MODELS_TO_TRY:
+                    if success:
+                        break
+                    for attempt in range(3):
+                        try:
+                            print(f"    {model_name} (attempt {attempt+1}/3)")
+                            response = client.models.generate_content(
+                                model=model_name,
+                                contents=[types.Part.from_bytes(data=image_data, mime_type=mime_type), prompt],
+                            )
+                            raw = response.text.strip()
+                            lines_count = len([l for l in raw.split('\n') if '|' in l])
+                            print(f"    RAW: {len(raw)} chars, {lines_count} lines")
+                            print(f"    RAW: {raw[:400]}")
+                            if raw.startswith("```"): raw = raw[3:]
+                            if raw.endswith("```"): raw = raw[:-3]
+                            raw = raw.strip()
+                            partial = parse_ai_output(raw)
+                            n = sum(1 for k in partial if k.startswith("item_"))
+                            print(f"    Parsed: {n} items, {len(partial)} keys")
+                            merge_results(extracted_json, partial)
+                            success = True
+                            break
+                        except HTTPException:
+                            raise
+                        except Exception as e:
+                            err_str = str(e)
+                            print(f"    {model_name} FAILED: {type(e).__name__}: {e}")
+                            all_errors.append((model_name, f"photo_{idx+1}", err_str[:200]))
+                            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                                print(f"    Quota exhausted on {model_name}")
+                            else:
+                                time.sleep(1)
+                            continue
+
+                # Delay between photos to avoid rate limits
+                if idx < total_photos - 1:
+                    time.sleep(1.5)
+
+            item_count = sum(1 for k in extracted_json if k.startswith("item_")
+                             or k.startswith("concern_") or k.startswith("note_"))
+            print(f"Total: {item_count} items from {total_photos} photos, keys: {list(extracted_json.keys())[:30]}")
+
         except HTTPException:
             raise
         except Exception as e:
             import traceback
-            print(f"AI ERROR (falling back): {traceback.format_exc()}")
+            print(f"ERROR: {traceback.format_exc()}")
             extracted_json = {}
 
     item_count = sum(1 for k in extracted_json if k.startswith("item_") or k.startswith("concern_") or k.startswith("note_"))
-    print(f"Total extracted items: {item_count}, keys: {list(extracted_json.keys())[:20]}")
 
     if item_count == 0:
         print("WARNING: AI returned no data.")
@@ -254,13 +268,8 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     response.headers["X-Data-Count"] = str(item_count)
     response.headers["X-Extracted-Json"] = data_json[:2000]
     if item_count == 0:
-        raw_snippet = ""
-        for m, t, d in reversed(all_errors):
-            if len(d) > 300: d = d[:300] + "..."
-            raw_snippet = f"  [{m}] {d}"
-            break
-        err_detail = "; ".join(f"{m}: {t}" for m, t in all_errors[-3:]) if all_errors else "unknown"
-        response.headers["X-Warning"] = f"AI error - {err_detail}. Raw: {raw_snippet}"
+        err_detail = "; ".join(f"photo {t}: {m}" for m, t, _ in all_errors[-5:]) if all_errors else "unknown"
+        response.headers["X-Warning"] = f"AI error - {err_detail}"
     return response
 
 from fastapi.staticfiles import StaticFiles
