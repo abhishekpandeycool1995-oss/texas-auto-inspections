@@ -7,8 +7,26 @@ const generateBtn = document.getElementById('generate-btn');
 const btnText = document.querySelector('.btn-text');
 const spinner = document.querySelector('.spinner');
 const statusMessage = document.getElementById('status-message');
+const quotaUsed = document.getElementById('quota-used');
+const quotaLimit = document.getElementById('quota-limit');
+const quotaFill = document.getElementById('quota-fill');
 
 let currentFiles = [];
+
+async function fetchQuota() {
+    try {
+        const r = await fetch('/api/quota');
+        const d = await r.json();
+        quotaUsed.textContent = d.used;
+        quotaLimit.textContent = d.limit;
+        const pct = Math.min(100, (d.used / d.limit) * 100);
+        quotaFill.style.width = pct + '%';
+        if (d.remaining <= 0) {
+            generateBtn.disabled = true;
+        }
+    } catch (_) {}
+}
+fetchQuota();
 
 uploadZone.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -179,5 +197,6 @@ generateBtn.addEventListener('click', async () => {
         generateBtn.disabled = false;
         btnText.textContent = 'Generate Official PDF';
         spinner.classList.add('hidden');
+        fetchQuota();
     }
 });
