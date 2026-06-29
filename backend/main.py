@@ -152,8 +152,9 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 image_parts.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
 
             extracted_json = {}
-            response = None
+            model_used = None
             for model_name in MODELS_TO_TRY:
+                response = None
                 for attempt in range(5):
                     try:
                         print(f"  Trying {model_name} (attempt {attempt+1}/5) with {len(image_parts)} images")
@@ -184,20 +185,22 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                         all_errors.append((model_name, type(e).__name__, err_str))
                         continue
                 if response:
-                    break
+                    text = response.text.strip()
+                    if text.startswith("```json"): text = text[7:-3]
+                    elif text.startswith("```"): text = text[3:-3]
+                    text = text.strip()
+                    try:
+                        extracted_json = json.loads(text)
+                        model_used = model_name
+                        break
+                    except json.JSONDecodeError as je:
+                        print(f"  JSON ERROR from {model_name}: {text[:200]}")
+                        all_errors.append((model_name, "JSONDecodeError", str(je)))
+                        continue
 
-            if response:
-                text = response.text.strip()
-                if text.startswith("```json"): text = text[7:-3]
-                elif text.startswith("```"): text = text[3:-3]
-                try:
-                    extracted_json = json.loads(text)
-                except json.JSONDecodeError as je:
-                    print(f"  JSON ERROR from {model_name}: {text[:200]}")
-                    all_errors.append((model_name, "JSONDecodeError", str(je)))
-                    extracted_json = {}
+            if model_used:
                 n = sum(1 for k in extracted_json if k.startswith("item_"))
-                print(f"  Parsed: {n} items, {len(extracted_json)} keys")
+                print(f"  {model_used}: {n} items, {len(extracted_json)} keys")
             else:
                 print(f"WARNING: All AI models failed. Errors: {[m for m,_,_ in all_errors]}")
                 extracted_json = {}
