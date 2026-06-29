@@ -10,7 +10,7 @@ from io import BytesIO
 from PIL import Image
 import pillow_heif
 pillow_heif.register_heif_opener()
-from pdf_service import fill_pdf
+from backend.pdf_service import fill_pdf
 
 app = FastAPI()
 
