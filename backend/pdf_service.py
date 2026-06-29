@@ -103,17 +103,25 @@ SECTION_COLUMNS = {
 def draw_checkbox(page, x, y, checked, field_name, size=4):
     s = size
     rect = fitz.Rect(x - s, y - s, x + s, y + s)
-    w = fitz.Widget()
-    w.rect = rect
-    w.field_type = fitz.PDF_WIDGET_TYPE_CHECKBOX
-    w.field_name = field_name
-    w.field_value = "Yes" if checked else "Off"
-    w.field_flags = 0
-    w.border_width = 0.5
-    w.border_color = (0, 0, 0)
-    w.fill_color = (1, 1, 1)
-    page.add_widget(w)
-    w.update()
+    page.draw_rect(rect, color=(0, 0, 0), width=0.5, fill=(1, 1, 1))
+    if checked:
+        cx, cy = x, y
+        page.draw_line((cx - s + 1, cy + s - 3), (cx - 1, cy + 1), color=(0, 0, 0), width=1.2)
+        page.draw_line((cx - 1, cy + 1), (cx + s - 1, cy - s + 2), color=(0, 0, 0), width=1.2)
+    try:
+        w = fitz.Widget()
+        w.rect = rect
+        w.field_type = fitz.PDF_WIDGET_TYPE_CHECKBOX
+        w.field_name = field_name
+        w.field_value = "Yes" if checked else "Off"
+        w.field_flags = 0
+        w.border_width = 0.5
+        w.border_color = (0, 0, 0)
+        w.fill_color = (1, 1, 1)
+        page.add_widget(w)
+        w.update()
+    except Exception:
+        pass
 
 def draw_text(page, x, y, text, fontsize=7):
     if text:
@@ -123,20 +131,24 @@ def draw_editable_text(page, x, y, text, field_name, fontsize=7.5, width=160):
     if not text or not text.strip():
         return
     text = text.strip()
-    tw = min(width, len(text) * fontsize * 0.5 + 6)
-    w = fitz.Widget()
-    w.rect = fitz.Rect(x, y - fontsize - 1, x + tw, y + 1)
-    w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
-    w.field_name = field_name
-    w.field_value = text
-    w.field_flags = 0
-    w.text_font = "helv"
-    w.text_fontsize = fontsize
-    w.text_color = (0, 0, 0)
-    w.fill_color = None
-    w.border_width = 0
-    page.add_widget(w)
-    w.update()
+    page.insert_text((x, y - 3), text, fontsize=fontsize, color=(0, 0, 0), fontname="helv")
+    try:
+        tw = min(width, len(text) * fontsize * 0.5 + 6)
+        w = fitz.Widget()
+        w.rect = fitz.Rect(x, y - fontsize - 1, x + tw, y + 1)
+        w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+        w.field_name = field_name
+        w.field_value = text
+        w.field_flags = 0
+        w.text_font = "helv"
+        w.text_fontsize = fontsize
+        w.text_color = (0, 0, 0)
+        w.fill_color = None
+        w.border_width = 0
+        page.add_widget(w)
+        w.update()
+    except Exception:
+        pass
 
 def fill_pdf(input_pdf_path, output_pdf_path, data_dict):
     doc = fitz.open(input_pdf_path)
