@@ -114,9 +114,10 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         print("No API key set. Set GROQ_API_KEY environment variable.")
         extracted_json = {}
     else:
-        MODELS_TO_TRY = [
-            "llama-3.2-90b-vision-preview",
-            "llama-3.2-11b-vision-preview",
+        MODELS_CFG = [
+            {"model": "meta-llama/llama-4-scout-17b-16e-instruct", "max_images": 5},
+            {"model": "qwen/qwen3.6-27b", "max_images": 5},
+            {"model": "llama-3.2-90b-vision-preview", "max_images": None},
         ]
 
         import time
@@ -134,6 +135,13 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 return buf.getvalue(), "image/jpeg"
             except Exception:
                 return data, ct
+
+        def build_content_parts(image_batch):
+            parts = [{"type": "text", "text": PROMPT}]
+            for img_data, mime in image_batch:
+                b64 = base64.b64encode(img_data).decode("utf-8")
+                parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            return parts
 
         try:
             client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
@@ -154,27 +162,35 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                     raise
                 image_data_list.append((image_data, mime_type))
 
-            # Send ALL images in a single API call so the AI sees the full form
+            # Try each model, batching if needed
             extracted_json = {}
-            response = None
-            for model_name in MODELS_TO_TRY:
+            response_obj = None
+            for cfg in MODELS_CFG:
+                model_name = cfg["model"]
+                max_imgs = cfg["max_images"]
+                batches = [image_data_list]
+                if max_imgs and len(image_data_list) > max_imgs:
+                    batches = [image_data_list[i:i+max_imgs] for i in range(0, len(image_data_list), max_imgs)]
+                    print(f"  {model_name} limit {max_imgs} images, splitting {len(image_data_list)} into {len(batches)} batches")
+
                 for attempt in range(5):
                     try:
-                        print(f"  Trying {model_name} (attempt {attempt+1}/5) with {len(image_data_list)} images")
-                        content_parts = [{"type": "text", "text": PROMPT}]
-                        for img_data, mime in image_data_list:
-                            b64 = base64.b64encode(img_data).decode("utf-8")
-                            content_parts.append({
-                                "type": "image_url",
-                                "image_url": {"url": f"data:{mime};base64,{b64}"}
-                            })
-                        response = client.chat.completions.create(
-                            model=model_name,
-                            messages=[{"role": "user", "content": content_parts}],
-                            temperature=0.0,
-                            max_tokens=4096,
-                        )
-                        print(f"  {model_name} OK")
+                        merged = {}
+                        for batch_idx, batch in enumerate(batches):
+                            print(f"  Trying {model_name} (attempt {attempt+1}/5) batch {batch_idx+1}/{len(batches)} ({len(batch)} images)")
+                            resp = client.chat.completions.create(
+                                model=model_name,
+                                messages=[{"role": "user", "content": build_content_parts(batch)}],
+                                temperature=0.0,
+                                max_tokens=4096,
+                            )
+                            text = resp.choices[0].message.content.strip()
+                            if text.startswith("```json"): text = text[7:-3]
+                            elif text.startswith("```"): text = text[3:-3]
+                            partial = json.loads(text)
+                            merged.update(partial)
+                        response_obj = merged
+                        print(f"  {model_name} OK, {len(merged)} keys")
                         break
                     except HTTPException:
                         raise
@@ -192,19 +208,11 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                         print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
                         last_error = (model_name, type(e).__name__, err_str)
                         continue
-                if response:
+                if response_obj:
                     break
 
-            if response:
-                text = response.choices[0].message.content.strip()
-                if text.startswith("```json"): text = text[7:-3]
-                elif text.startswith("```"): text = text[3:-3]
-                try:
-                    extracted_json = json.loads(text)
-                except json.JSONDecodeError as je:
-                    print(f"  JSON ERROR from {model_name}: {text[:200]}")
-                    last_error = (model_name, "JSONDecodeError", str(je))
-                    extracted_json = {}
+            if response_obj:
+                extracted_json = response_obj
                 n = sum(1 for k in extracted_json if k.startswith("item_"))
                 print(f"  Parsed: {n} items, {len(extracted_json)} keys")
             else:
