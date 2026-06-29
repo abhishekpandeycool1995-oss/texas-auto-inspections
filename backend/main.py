@@ -162,7 +162,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                             model=model_name,
                             contents=image_parts + [PROMPT],
                             config=types.GenerateContentConfig(
-                                temperature=0.0,
+                                temperature=0.1,
                                 max_output_tokens=4096,
                             )
                         )
@@ -186,16 +186,23 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                         continue
                 if response:
                     text = response.text.strip()
-                    if text.startswith("```json"): text = text[7:-3]
-                    elif text.startswith("```"): text = text[3:-3]
+                    print(f"  RAW RESPONSE ({model_name}): {text[:500]}")
+                    if text.startswith("```json"): text = text[7:]
+                    elif text.startswith("```"): text = text[3:]
+                    if text.endswith("```"): text = text[:-3]
                     text = text.strip()
+                    # Try to extract JSON object from any surrounding text
+                    start = text.find("{")
+                    end = text.rfind("}")
+                    if start != -1 and end != -1 and end > start:
+                        text = text[start:end+1]
                     try:
                         extracted_json = json.loads(text)
                         model_used = model_name
                         break
                     except json.JSONDecodeError as je:
-                        print(f"  JSON ERROR from {model_name}: {text[:200]}")
-                        all_errors.append((model_name, "JSONDecodeError", str(je)))
+                        print(f"  JSON ERROR from {model_name}: {text[:300]}")
+                        all_errors.append((model_name, "JSONDecodeError", text[:100]))
                         continue
 
             if model_used:
@@ -232,8 +239,8 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     response.headers["X-Data-Count"] = str(item_count)
     response.headers["X-Extracted-Json"] = data_json[:2000]
     if item_count == 0:
-        err_detail = "; ".join(f"{m}: {t}" for m, t, _ in all_errors[-3:]) if all_errors else "unknown"
-        response.headers["X-Warning"] = f"AI could not read the handwriting. Errors: {err_detail}. Returning blank form."
+        err_detail = "; ".join(f"{m}: {t}" for m, t in all_errors[-3:]) if all_errors else "unknown"
+        response.headers["X-Warning"] = f"AI error - {err_detail}. Returning blank form."
     return response
 
 from fastapi.staticfiles import StaticFiles
