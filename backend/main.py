@@ -118,6 +118,9 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         MODELS_TO_TRY = [
             "gemini-2.5-flash-lite",
             "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
         ]
 
         import time
@@ -178,6 +181,14 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                             last_error = (model_name, type(e).__name__, err_str)
                             continue
                         if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                            import re
+                            m = re.search(r'retry in (\d+(?:\.\d+)?)s', err_str, re.I)
+                            if m and attempt < 4:
+                                delay = float(m.group(1)) + 2
+                                print(f"  {model_name} rate limited, waiting {delay:.0f}s (attempt {attempt+1}/5)...")
+                                time.sleep(min(delay, 65))
+                                last_error = (model_name, type(e).__name__, err_str)
+                                continue
                             print(f"  {model_name} quota exhausted, trying next model...")
                             last_error = (model_name, type(e).__name__, err_str)
                             break
