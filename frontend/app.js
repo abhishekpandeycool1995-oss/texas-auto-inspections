@@ -21,9 +21,6 @@ async function fetchQuota() {
         quotaLimit.textContent = d.limit;
         const pct = Math.min(100, (d.used / d.limit) * 100);
         quotaFill.style.width = pct + '%';
-        if (d.remaining <= 0) {
-            generateBtn.disabled = true;
-        }
     } catch (_) {}
 }
 fetchQuota();
