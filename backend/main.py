@@ -109,7 +109,7 @@ Look at every image page by page. Do not skip any. Output only valid JSON.
 async def process_inspection(files: List[UploadFile] = File(...)):
     check_quota()
     api_key = os.environ.get("GROQ_API_KEY")
-    last_error = None
+    all_errors = []
     if not api_key:
         print("No API key set. Set GROQ_API_KEY environment variable.")
         extracted_json = {}
@@ -117,7 +117,6 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         MODELS_CFG = [
             {"model": "meta-llama/llama-4-scout-17b-16e-instruct", "max_images": 5},
             {"model": "qwen/qwen3.6-27b", "max_images": 5},
-            {"model": "llama-3.2-90b-vision-preview", "max_images": None},
         ]
 
         import time
@@ -127,11 +126,11 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             try:
                 img = Image.open(BytesIO(data))
                 w, h = img.size
-                if max(w, h) > 1800:
-                    ratio = 1800 / max(w, h)
+                if max(w, h) > 1200:
+                    ratio = 1200 / max(w, h)
                     img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
                 buf = BytesIO()
-                img.save(buf, format="JPEG", quality=90)
+                img.save(buf, format="JPEG", quality=80)
                 return buf.getvalue(), "image/jpeg"
             except Exception:
                 return data, ct
@@ -199,14 +198,14 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                         if "503" in err_str or "UNAVAILABLE" in err_str:
                             print(f"  {model_name} overloaded, retrying in {2**attempt}s...")
                             time.sleep(2 ** attempt)
-                            last_error = (model_name, type(e).__name__, err_str)
+                            all_errors.append((model_name, type(e).__name__, err_str))
                             continue
                         if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                             print(f"  {model_name} quota exhausted, trying next model...")
-                            last_error = (model_name, type(e).__name__, err_str)
+                            all_errors.append((model_name, type(e).__name__, err_str))
                             break
                         print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
-                        last_error = (model_name, type(e).__name__, err_str)
+                        all_errors.append((model_name, type(e).__name__, err_str))
                         continue
                 if response_obj:
                     break
@@ -216,7 +215,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 n = sum(1 for k in extracted_json if k.startswith("item_"))
                 print(f"  Parsed: {n} items, {len(extracted_json)} keys")
             else:
-                print(f"WARNING: All AI models failed. Last error: {last_error}")
+                print(f"WARNING: All AI models failed. Errors: {[m for m,_,_ in all_errors]}")
                 extracted_json = {}
             print(f"Total: {len(extracted_json)} keys")
         except HTTPException:
@@ -247,8 +246,8 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     response.headers["X-Data-Count"] = str(item_count)
     response.headers["X-Extracted-Json"] = data_json[:2000]
     if item_count == 0:
-        err_detail = str(last_error) if last_error else "unknown"
-        response.headers["X-Warning"] = f"AI could not read the handwriting. Reason: {err_detail}. Returning blank form."
+        err_detail = "; ".join(f"{m}: {t}" for m, t, _ in all_errors[-3:]) if all_errors else "unknown"
+        response.headers["X-Warning"] = f"AI could not read the handwriting. Errors: {err_detail}. Returning blank form."
     return response
 
 from fastapi.staticfiles import StaticFiles
