@@ -11,6 +11,26 @@ from PIL import Image
 import pillow_heif
 pillow_heif.register_heif_opener()
 from backend.pdf_service import fill_pdf
+from datetime import date
+
+QUOTA_LIMIT = 10
+QUOTA_FILE = os.path.join(os.path.dirname(__file__), "quota.json")
+
+def check_quota():
+    today = str(date.today())
+    data = {}
+    try:
+        with open(QUOTA_FILE) as f:
+            data = json.load(f)
+    except:
+        pass
+    if data.get("date") != today:
+        data = {"date": today, "count": 0}
+    if data["count"] >= QUOTA_LIMIT:
+        raise HTTPException(status_code=429, detail=f"Daily quota finished. Limit is {QUOTA_LIMIT} generations/day. Resets at midnight.")
+    data["count"] += 1
+    with open(QUOTA_FILE, "w") as f:
+        json.dump(data, f)
 
 app = FastAPI()
 
@@ -95,6 +115,7 @@ ONLY output valid JSON. Do not use markdown code blocks like ```json, just outpu
 
 @app.post("/api/process-inspection")
 async def process_inspection(files: List[UploadFile] = File(...)):
+    check_quota()
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         try:
