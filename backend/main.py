@@ -1,10 +1,9 @@
-import os, json
+import os, json, base64
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from google import genai
-from google.genai import types
+from openai import OpenAI
 import tempfile
 from io import BytesIO
 from PIL import Image
@@ -109,15 +108,15 @@ Look at every image page by page. Do not skip any. Output only valid JSON.
 @app.post("/api/process-inspection")
 async def process_inspection(files: List[UploadFile] = File(...)):
     check_quota()
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     last_error = None
     if not api_key:
-        print("No API key set. Set GEMINI_API_KEY environment variable.")
+        print("No API key set. Set GROQ_API_KEY environment variable.")
         extracted_json = {}
     else:
         MODELS_TO_TRY = [
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
+            "llama-3.2-90b-vision-preview",
+            "llama-3.2-11b-vision-preview",
         ]
 
         import time
@@ -137,10 +136,10 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 return data, ct
 
         try:
-            client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
+            client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
 
             # Read and normalize all images first
-            image_parts = []
+            image_data_list = []
             for f in files:
                 try:
                     img_bytes = await f.read()
@@ -153,7 +152,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 except Exception as e:
                     print(f"NORMALIZE ERROR for {f.filename}: {type(e).__name__}: {e}")
                     raise
-                image_parts.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
+                image_data_list.append((image_data, mime_type))
 
             # Send ALL images in a single API call so the AI sees the full form
             extracted_json = {}
@@ -161,10 +160,19 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             for model_name in MODELS_TO_TRY:
                 for attempt in range(5):
                     try:
-                        print(f"  Trying {model_name} (attempt {attempt+1}/5) with {len(image_parts)} images")
-                        response = client.models.generate_content(
+                        print(f"  Trying {model_name} (attempt {attempt+1}/5) with {len(image_data_list)} images")
+                        content_parts = [{"type": "text", "text": PROMPT}]
+                        for img_data, mime in image_data_list:
+                            b64 = base64.b64encode(img_data).decode("utf-8")
+                            content_parts.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{b64}"}
+                            })
+                        response = client.chat.completions.create(
                             model=model_name,
-                            contents=image_parts + [PROMPT]
+                            messages=[{"role": "user", "content": content_parts}],
+                            temperature=0.0,
+                            max_tokens=4096,
                         )
                         print(f"  {model_name} OK")
                         break
@@ -188,7 +196,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                     break
 
             if response:
-                text = response.text.strip()
+                text = response.choices[0].message.content.strip()
                 if text.startswith("```json"): text = text[7:-3]
                 elif text.startswith("```"): text = text[3:-3]
                 try:
