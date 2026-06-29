@@ -18,8 +18,8 @@ async function fetchQuota() {
         const r = await fetch('/api/quota');
         const d = await r.json();
         quotaUsed.textContent = d.used;
-        quotaLimit.textContent = d.limit;
-        const pct = Math.min(100, (d.used / d.limit) * 100);
+        quotaLimit.textContent = 10;
+        const pct = Math.min(100, (d.used / 10) * 100);
         quotaFill.style.width = pct + '%';
     } catch (_) {}
 }

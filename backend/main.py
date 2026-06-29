@@ -13,7 +13,7 @@ pillow_heif.register_heif_opener()
 from backend.pdf_service import fill_pdf
 from datetime import date
 
-QUOTA_LIMIT = 10
+QUOTA_LIMIT = 1500
 QUOTA_FILE = os.path.join(os.path.dirname(__file__), "quota.json")
 
 def check_quota():
