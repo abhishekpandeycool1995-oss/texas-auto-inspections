@@ -131,6 +131,7 @@ ONLY output valid JSON. Do not use markdown code blocks like ```json, just outpu
 async def process_inspection(files: List[UploadFile] = File(...)):
     check_quota()
     api_key = os.environ.get("GEMINI_API_KEY")
+    last_error = None
     if not api_key:
         try:
             with open(os.path.join(os.path.dirname(__file__), "..", "api_key.txt"), "r") as f:
@@ -144,9 +145,8 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     else:
         MODELS_TO_TRY = [
             "gemini-2.5-flash",
-            "gemini-2.5-flash-001",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-001",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-pro",
         ]
 
         import time
@@ -164,7 +164,6 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         try:
             client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
             extracted_json = {}
-            last_error = None
 
             for f in files:
                 try:
@@ -257,7 +256,8 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     response.headers["X-Data-Count"] = str(item_count)
     response.headers["X-Extracted-Json"] = data_json[:2000]
     if item_count == 0:
-        response.headers["X-Warning"] = "AI could not read the handwriting. PDF has been returned as a blank form."
+        err_detail = str(last_error) if last_error else "unknown"
+        response.headers["X-Warning"] = f"AI could not read the handwriting. Reason: {err_detail}. Returning blank form."
     return response
 
 from fastapi.staticfiles import StaticFiles
