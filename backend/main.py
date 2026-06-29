@@ -41,6 +41,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/api/quota")
+def get_quota():
+    today = str(date.today())
+    data = {}
+    try:
+        with open(QUOTA_FILE) as f:
+            data = json.load(f)
+    except:
+        pass
+    if data.get("date") != today:
+        data = {"date": today, "count": 0}
+    return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
+
 # Explicit prompt mapping handwriting to specific keys.
 PROMPT = """
 You are an expert handwriting transcriber. I have attached a handwritten vehicle pre-purchase inspection checklist for the Texas First Auto Inspection 173-point form.
