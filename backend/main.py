@@ -1,9 +1,10 @@
-import os, json, base64
+import os, json
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
+from google import genai
+from google.genai import types
 import tempfile
 from io import BytesIO
 from PIL import Image
@@ -54,7 +55,6 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-# Explicit prompt mapping handwriting to specific keys.
 PROMPT = """
 You are an expert forensic handwriting transcriber for a vehicle inspection form. You will receive MULTIPLE PHOTOS of a single 173-point inspection checklist. They may be in any order — reassemble them mentally.
 
@@ -67,33 +67,33 @@ JSON rules:
 
 Key formats by section:
 
-ITEMS 1-8 (Interior → OK/PASS/FAIL):
+ITEMS 1-8 (Interior -> OK/PASS/FAIL):
   "item_1_OK": true, "item_1_PASS": true, "item_1_FAIL": true
 
-ITEMS 9-24 (Seats & Carpet → PASS/BLEMISH/DIRTY):
+ITEMS 9-24 (Seats & Carpet -> PASS/BLEMISH/DIRTY):
   "item_9_PASS": true, "item_9_BLEMISH": true, "item_9_DIRTY": true
 
-ITEMS 25-63 (Electrical → WORKS/BROKEN/CRACKED):
+ITEMS 25-63 (Electrical -> WORKS/BROKEN/CRACKED):
   "item_25_WORKS": true, "item_25_BROKEN": true, "item_25_CRACKED": true
 
-ITEMS 64-83 (Dashboard & Safety → PASS/FAIL/NA):
+ITEMS 64-83 (Dashboard & Safety -> PASS/FAIL/NA):
   "item_64_PASS": true, "item_64_FAIL": true, "item_64_NA": true
 
-ITEMS 84-101 (Exterior → OK/SCRATCH/DING/CHIP/RUST/DENT):
+ITEMS 84-101 (Exterior -> OK/SCRATCH/DING/CHIP/RUST/DENT):
   "item_84_OK": true, "item_84_SCRATCH": true
 
-ITEMS 102-113 (Glass → OK/CHIP/SCRATCH/CRACKED)
-ITEMS 114-116 (Mirrors → OK/CHIPS/CRACK/HAZY/MISSING)
-ITEMS 117-124 (Tires → EXCELLENT/GOOD/FAIR/POOR)
-ITEMS 125-146 (Under Hood → NO/YES/NA)
-ITEMS 147-151 (Suspension → PASS/FAIL/NA)
-ITEMS 152-157 (Under Carriage → PASS/FAIL/NA)
-ITEMS 158-161 (Test Drive → EXCELLENT/GOOD/FAIR/POOR)
-ITEMS 162-167 (Brakes → PASS/FAIL/NA)
-ITEMS 168-170 (Diagnostics → PASS/FAIL/NA)
-ITEM 171 (Overall → EXCELLENT/GOOD/FAIR/POOR)
-ITEM 172 (Frame Damage → YES/NO/NA)
-ITEM 173 (Flood Damage → YES/NO/NA)
+ITEMS 102-113 (Glass -> OK/CHIP/SCRATCH/CRACKED)
+ITEMS 114-116 (Mirrors -> OK/CHIPS/CRACK/HAZY/MISSING)
+ITEMS 117-124 (Tires -> EXCELLENT/GOOD/FAIR/POOR)
+ITEMS 125-146 (Under Hood -> NO/YES/NA)
+ITEMS 147-151 (Suspension -> PASS/FAIL/NA)
+ITEMS 152-157 (Under Carriage -> PASS/FAIL/NA)
+ITEMS 158-161 (Test Drive -> EXCELLENT/GOOD/FAIR/POOR)
+ITEMS 162-167 (Brakes -> PASS/FAIL/NA)
+ITEMS 168-170 (Diagnostics -> PASS/FAIL/NA)
+ITEM 171 (Overall -> EXCELLENT/GOOD/FAIR/POOR)
+ITEM 172 (Frame Damage -> YES/NO/NA)
+ITEM 173 (Flood Damage -> YES/NO/NA)
 
 Notes: "note_N": "text of their handwritten note"
 Header: "s_iname", "s_date", "vin", "odo", "make_model", "client", "sales_rep", "dealership", "address", "extra_notes"
@@ -108,15 +108,15 @@ Look at every image page by page. Do not skip any. Output only valid JSON.
 @app.post("/api/process-inspection")
 async def process_inspection(files: List[UploadFile] = File(...)):
     check_quota()
-    api_key = os.environ.get("GROQ_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     all_errors = []
     if not api_key:
-        print("No API key set. Set GROQ_API_KEY environment variable.")
+        print("No API key set. Set GEMINI_API_KEY environment variable.")
         extracted_json = {}
     else:
-        MODELS_CFG = [
-            {"model": "meta-llama/llama-4-scout-17b-16e-instruct", "max_images": 5},
-            {"model": "qwen/qwen3.6-27b", "max_images": 5},
+        MODELS_TO_TRY = [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
         ]
 
         import time
@@ -135,18 +135,10 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             except Exception:
                 return data, ct
 
-        def build_content_parts(image_batch):
-            parts = [{"type": "text", "text": PROMPT}]
-            for img_data, mime in image_batch:
-                b64 = base64.b64encode(img_data).decode("utf-8")
-                parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-            return parts
-
         try:
-            client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+            client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
 
-            # Read and normalize all images first
-            image_data_list = []
+            image_parts = []
             for f in files:
                 try:
                     img_bytes = await f.read()
@@ -159,37 +151,19 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                 except Exception as e:
                     print(f"NORMALIZE ERROR for {f.filename}: {type(e).__name__}: {e}")
                     raise
-                image_data_list.append((image_data, mime_type))
+                image_parts.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
 
-            # Try each model, batching if needed
             extracted_json = {}
-            response_obj = None
-            for cfg in MODELS_CFG:
-                model_name = cfg["model"]
-                max_imgs = cfg["max_images"]
-                batches = [image_data_list]
-                if max_imgs and len(image_data_list) > max_imgs:
-                    batches = [image_data_list[i:i+max_imgs] for i in range(0, len(image_data_list), max_imgs)]
-                    print(f"  {model_name} limit {max_imgs} images, splitting {len(image_data_list)} into {len(batches)} batches")
-
+            response = None
+            for model_name in MODELS_TO_TRY:
                 for attempt in range(5):
                     try:
-                        merged = {}
-                        for batch_idx, batch in enumerate(batches):
-                            print(f"  Trying {model_name} (attempt {attempt+1}/5) batch {batch_idx+1}/{len(batches)} ({len(batch)} images)")
-                            resp = client.chat.completions.create(
-                                model=model_name,
-                                messages=[{"role": "user", "content": build_content_parts(batch)}],
-                                temperature=0.0,
-                                max_tokens=4096,
-                            )
-                            text = resp.choices[0].message.content.strip()
-                            if text.startswith("```json"): text = text[7:-3]
-                            elif text.startswith("```"): text = text[3:-3]
-                            partial = json.loads(text)
-                            merged.update(partial)
-                        response_obj = merged
-                        print(f"  {model_name} OK, {len(merged)} keys")
+                        print(f"  Trying {model_name} (attempt {attempt+1}/5) with {len(image_parts)} images")
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=image_parts + [PROMPT]
+                        )
+                        print(f"  {model_name} OK")
                         break
                     except HTTPException:
                         raise
@@ -207,17 +181,24 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                         print(f"  {model_name} FAILED: {type(e).__name__}: {e}")
                         all_errors.append((model_name, type(e).__name__, err_str))
                         continue
-                if response_obj:
+                if response:
                     break
 
-            if response_obj:
-                extracted_json = response_obj
+            if response:
+                text = response.text.strip()
+                if text.startswith("```json"): text = text[7:-3]
+                elif text.startswith("```"): text = text[3:-3]
+                try:
+                    extracted_json = json.loads(text)
+                except json.JSONDecodeError as je:
+                    print(f"  JSON ERROR from {model_name}: {text[:200]}")
+                    all_errors.append((model_name, "JSONDecodeError", str(je)))
+                    extracted_json = {}
                 n = sum(1 for k in extracted_json if k.startswith("item_"))
                 print(f"  Parsed: {n} items, {len(extracted_json)} keys")
             else:
                 print(f"WARNING: All AI models failed. Errors: {[m for m,_,_ in all_errors]}")
                 extracted_json = {}
-            print(f"Total: {len(extracted_json)} keys")
         except HTTPException:
             raise
         except Exception as e:
