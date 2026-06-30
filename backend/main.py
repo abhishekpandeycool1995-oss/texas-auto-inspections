@@ -55,36 +55,29 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-PAGE_PROMPT_BODY = """You are analyzing a scanned/photographed inspection form page with rows of checkboxes.
+PAGE_PROMPT_BODY = """This is ONE PAGE of a Texas 173-point vehicle inspection form.
 
-CRITICAL INSTRUCTIONS — follow these exactly:
+INSTRUCTIONS:
+1. Find EVERY item number visible on this page (they are numbered 1-173 on the left side)
+2. For EACH item, look at the checkboxes to the right and determine:
+   - Which column has a handwritten pen mark (checkmark, X, or filled box)
+   - Or if NO column has a mark
+3. Also read any handwritten notes in the notes column
 
-1. For each row, there are multiple empty square checkboxes side by side (e.g. □ □ □). Only ONE of them may contain a pen mark (checkmark, tick, X, or filled-in square).
+Output FORMAT (one line per item):
+item_NUMBER|COLUMN_HEADER or NONE|optional_notes
 
-2. Do NOT guess based on what answer seems "likely" or "typical" for that item. Only report a box as checked if you can visually confirm a pen mark INSIDE that specific box's boundaries.
+COLUMN_HEADER is the printed text at the top of the checkbox column (e.g. OK, PASS, FAIL, WORKS, BROKEN, CRACKED, etc.)
 
-3. If multiple checkboxes in a row look ambiguous or unclear, examine the exact pixel area inside each box individually before deciding.
+CRITICAL: Output EVERY item visible on this page, even if no checkmark is present (use NONE).
 
-4. Distinguish between:
-   - An EMPTY box (just the square outline, no mark inside) → not checked
-   - A box with a clear tick/checkmark/X inside it → checked
-   - A faint smudge, shadow, or printing artifact → treat as NOT checked unless it's clearly a deliberate pen stroke
-
-5. If NO box in a row has a visible mark, skip that row entirely — do not default to any particular column.
-
-6. If a mark appears to overlap two adjacent boxes, choose the box where the majority of the ink/mark falls.
-
-7. Before finalizing your answer for each row, do a self-check: "Did I find an actual pen mark inside this exact box, or am I assuming based on the row label?" Only confirm if it's the former.
-
-8. Work through the image section by section, row by row, in order — do not skip around.
-
-Output each item as: item_NUMBER|COLUMN_HEADER|optional_notes
-
-COLUMN_HEADER is the text printed at the top of the column (e.g. OK, PASS, FAIL, WORKS, BROKEN, etc.).
+SELF-CHECK after each row: "Can I see a real pen mark inside a checkbox, or am I guessing?"
 
 Examples:
 item_1|OK|no wind noise
-item_5|PASS|slight wear
+item_2|PASS|
+item_3|NONE|
+item_4|FAIL|slight burn smell
 
 Only output pipe-delimited lines. No introductions."""
 
@@ -132,6 +125,8 @@ def parse_ai_output(text):
             except (ValueError, IndexError):
                 continue
             status = parts[1].upper().replace('.', '').strip()
+            if status == 'NONE':
+                continue
             if status in VALID_COLUMNS:
                 result[f"item_{item_num}_{status}"] = True
             else:
