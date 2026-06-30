@@ -196,13 +196,14 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                     raise
                 photo_data.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
 
-            mid = len(photo_data) // 2
+            mid = (len(photo_data) + 1) // 2
             batches = [
                 (photo_data[:mid], BATCH1_PROMPT, "batch1"),
                 (photo_data[mid:], BATCH2_PROMPT, "batch2"),
             ]
 
             extracted_json = {}
+            raw_responses = []
             for batch_parts, batch_prompt, batch_name in batches:
                 if not batch_parts:
                     continue
@@ -228,6 +229,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                             n = sum(1 for k in partial if k.startswith("item_"))
                             print(f"    Parsed: {n} items")
                             merge_results(extracted_json, partial)
+                            raw_responses.append(f"=== {batch_name} ({model_name}) ===\n{raw[:800]}")
                             success = True
                             break
                         except HTTPException:
@@ -278,7 +280,11 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     if item_count == 0:
         actual_errors = all_errors[-3:]
         err_detail = "; ".join(f"{t}: {d[:80]}" for _, t, d in actual_errors) if actual_errors else "unknown"
-        response.headers["X-Warning"] = f"0 items. {err_detail}"
+        raw_snip = "\n".join(raw_responses)[:500] if raw_responses else "no response"
+        response.headers["X-Warning"] = f"0 items. Errors: {err_detail}"
+        response.headers["X-Raw-AI"] = raw_snip
+    elif raw_responses:
+        response.headers["X-Raw-AI"] = "\n".join(raw_responses)[:1000]
     return response
 
 from fastapi.staticfiles import StaticFiles
