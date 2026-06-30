@@ -37,7 +37,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -55,46 +55,50 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-PAGE_PROMPT_BODY = """This is ONE PAGE of a Texas 173-point vehicle inspection form.
+BATCH1_PROMPT = """These are PHOTOS 1-4 of a 7-page Texas 173-point vehicle inspection form.
 
-INSTRUCTIONS:
-1. Find EVERY item number visible on this page (they are numbered 1-173 on the left side)
-2. For EACH item, look at the checkboxes to the right and determine:
-   - Which column has a handwritten pen mark (checkmark, X, or filled box)
-   - Or if NO column has a mark
-3. Also read any handwritten notes in the notes column
+The pages contain:
+- Page 1: Header info (Date, VIN, ODO, Make/Model, Client, Sales Rep, Dealership, Address) + Interior checklist (items 1-8) + Seats checklist (items 9-24)
+- Pages 2-3: Electrical checklist (items 25-63) + Dashboard (items 64-78) + Safety (items 79-83) + Exterior (items 84-101)
+- Page 4: Glass (items 102-113) + Mirrors (items 114-116) + start of Tires (items 117-121)
 
-Output FORMAT (one line per item):
-item_NUMBER|COLUMN_HEADER or NONE|optional_notes
+For EVERY item number that has a handwritten checkmark, X, or pen mark in a checkbox:
+item_N|COLUMN_HEADER|notes
 
-COLUMN_HEADER is the printed text at the top of the checkbox column (e.g. OK, PASS, FAIL, WORKS, BROKEN, CRACKED, etc.)
+COLUMN_HEADER = the printed text at the top of the column (OK, PASS, FAIL, WORKS, BROKEN, CRACKED, BLEMISH, DIRTY, NA, YES, NO, SCRATCH, DING, CHIP, RUST, DENT, CHIPS, CRACK, HAZY, MISSING, EXCELLENT, GOOD, FAIR, POOR).
 
-CRITICAL: Output EVERY item visible on this page, even if no checkmark is present (use NONE).
+Read header fields:
+header|s_date|value
+header|vin|value
+header|odo|value
+header|make_model|value
+header|client|value
+header|sales_rep|value
+header|dealership|value
+header|address|value
 
-SELF-CHECK after each row: "Can I see a real pen mark inside a checkbox, or am I guessing?"
+Only output pipe-delimited lines. No other text."""
 
-Examples:
-item_1|OK|no wind noise
-item_2|PASS|
-item_3|NONE|
-item_4|FAIL|slight burn smell
+BATCH2_PROMPT = """These are PHOTOS 5-7 of a 7-page Texas 173-point vehicle inspection form.
 
-Only output pipe-delimited lines. No introductions."""
+The pages contain:
+- Page 5: Tires continued (items 122-124) + Underhood (items 125-146) + Suspension (items 147-151) + Undercarriage (items 152-157)
+- Page 6: Test Drive (items 158-161) + Brake (items 162-167) + Diagnostics (items 168-170) + Overall (item 171) + Frame Damage (item 172) + Flood Damage (item 173)
+- Page 7: Customer concerns
 
-FIRST_PAGE_PROMPT = PAGE_PROMPT_BODY + """
+For EVERY item number that has a handwritten checkmark, X, or pen mark in a checkbox:
+item_N|COLUMN_HEADER|notes
 
-Also read the header fields at the TOP of this page:
-header|FIELD_NAME|value
+COLUMN_HEADER = the printed text at the top of the column (OK, PASS, FAIL, WORKS, BROKEN, CRACKED, BLEMISH, DIRTY, NA, YES, NO, SCRATCH, DING, CHIP, RUST, DENT, CHIPS, CRACK, HAZY, MISSING, EXCELLENT, GOOD, FAIR, POOR).
 
-Field names: s_date, vin, odo, make_model, client, sales_rep, dealership, address
-Example: header|vin|1HGCM82633A004352"""
+Read customer concerns from the last page:
+concern|1|text
+concern|2|text
+concern|3|text
+concern|4|text
+concern|5|text
 
-LAST_PAGE_PROMPT = PAGE_PROMPT_BODY + """
-
-Also read any customer concerns at the bottom of this page:
-concern|NUMBER|text
-
-Example: concern|1|engine vibration"""
+Only output pipe-delimited lines. No other text."""
 
 VALID_COLUMNS = {
     "OK", "PASS", "FAIL", "WORKS", "BROKEN", "CRACKED",
@@ -103,11 +107,6 @@ VALID_COLUMNS = {
     "CHIPS", "CRACK", "HAZY", "MISSING",
     "EXCELLENT", "GOOD", "FAIR", "POOR",
 }
-
-def merge_results(existing, new):
-    for k, v in new.items():
-        if k not in existing:
-            existing[k] = v
 
 def parse_ai_output(text):
     result = {}
@@ -125,11 +124,11 @@ def parse_ai_output(text):
             except (ValueError, IndexError):
                 continue
             status = parts[1].upper().replace('.', '').strip()
-            if status == 'NONE':
+            if status in ('NONE', 'NONE.', 'SKIPPED', 'N/A'):
                 continue
             if status in VALID_COLUMNS:
                 result[f"item_{item_num}_{status}"] = True
-            else:
+            elif status:
                 print(f"  UNKNOWN COLUMN '{status}' for item {item_num}")
             if len(parts) >= 3 and parts[2]:
                 result[f"note_{item_num}"] = parts[2].strip()
@@ -149,6 +148,11 @@ def parse_ai_output(text):
 
     return result
 
+def merge_results(existing, new):
+    for k, v in new.items():
+        if k not in existing:
+            existing[k] = v
+
 @app.post("/api/process-inspection")
 async def process_inspection(files: List[UploadFile] = File(...)):
     check_quota()
@@ -158,11 +162,6 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         print("No API key set. Set GEMINI_API_KEY environment variable.")
         extracted_json = {}
     else:
-        MODELS_TO_TRY = [
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-        ]
-
         import time
 
         def normalize_image(data, orig_ct):
@@ -182,56 +181,52 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         try:
             client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
 
-            # Read and normalize all photos
             photo_data = []
-            for idx, f in enumerate(files):
+            for f in files:
                 try:
                     img_bytes = await f.read()
                 except Exception as e:
                     print(f"  READ ERROR for {f.filename}: {type(e).__name__}: {e}")
                     raise
-                print(f"Photo {idx+1} ({f.filename}): {len(img_bytes)} bytes, {f.content_type}")
+                print(f"  {f.filename}: {len(img_bytes)} bytes, {f.content_type}")
                 try:
                     image_data, mime_type = normalize_image(img_bytes, f.content_type)
                 except Exception as e:
-                    print(f"NORMALIZE ERROR for {f.filename}: {type(e).__name__}: {e}")
+                    print(f"  NORMALIZE ERROR for {f.filename}: {type(e).__name__}: {e}")
                     raise
-                photo_data.append((image_data, mime_type, f.filename))
+                photo_data.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
+
+            mid = len(photo_data) // 2
+            batches = [
+                (photo_data[:mid], BATCH1_PROMPT, "batch1"),
+                (photo_data[mid:], BATCH2_PROMPT, "batch2"),
+            ]
 
             extracted_json = {}
-            total_photos = len(photo_data)
+            for batch_parts, batch_prompt, batch_name in batches:
+                if not batch_parts:
+                    continue
+                print(f"  Sending {batch_name} ({len(batch_parts)} photos)")
 
-            for idx, (image_data, mime_type, filename) in enumerate(photo_data):
-                if idx == 0 and total_photos > 0:
-                    prompt = FIRST_PAGE_PROMPT
-                elif idx == total_photos - 1 and total_photos > 1:
-                    prompt = LAST_PAGE_PROMPT
-                else:
-                    prompt = PAGE_PROMPT_BODY
-
-                print(f"  Processing photo {idx+1}/{total_photos} ({filename})")
-
-                success = False
-                for model_name in MODELS_TO_TRY:
-                    if success:
-                        break
+                for model_name in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
+                    success = False
                     for attempt in range(3):
                         try:
-                            print(f"    {model_name} (attempt {attempt+1}/3)")
+                            print(f"    {model_name} attempt {attempt+1}/3")
                             response = client.models.generate_content(
                                 model=model_name,
-                                contents=[types.Part.from_bytes(data=image_data, mime_type=mime_type), prompt],
+                                contents=batch_parts + [batch_prompt],
                             )
                             raw = response.text.strip()
                             lines_count = len([l for l in raw.split('\n') if '|' in l])
                             print(f"    RAW: {len(raw)} chars, {lines_count} lines")
-                            print(f"    RAW: {raw[:400]}")
+                            print(f"    RAW: {raw[:500]}")
                             if raw.startswith("```"): raw = raw[3:]
                             if raw.endswith("```"): raw = raw[:-3]
                             raw = raw.strip()
                             partial = parse_ai_output(raw)
                             n = sum(1 for k in partial if k.startswith("item_"))
-                            print(f"    Parsed: {n} items, {len(partial)} keys")
+                            print(f"    Parsed: {n} items")
                             merge_results(extracted_json, partial)
                             success = True
                             break
@@ -239,21 +234,20 @@ async def process_inspection(files: List[UploadFile] = File(...)):
                             raise
                         except Exception as e:
                             err_str = str(e)
-                            print(f"    {model_name} FAILED: {type(e).__name__}: {e}")
-                            all_errors.append((model_name, f"photo_{idx+1}", err_str[:200]))
+                            print(f"    FAILED: {type(e).__name__}: {err_str[:150]}")
+                            all_errors.append((model_name, batch_name, err_str[:200]))
                             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                                print(f"    Quota exhausted on {model_name}")
-                            else:
-                                time.sleep(1)
+                                print(f"    Quota exhausted")
+                                break
+                            time.sleep(1)
                             continue
+                    if success:
+                        break
 
-                # Delay between photos to avoid rate limits
-                if idx < total_photos - 1:
-                    time.sleep(1.5)
+                time.sleep(2)
 
-            item_count = sum(1 for k in extracted_json if k.startswith("item_")
-                             or k.startswith("concern_") or k.startswith("note_"))
-            print(f"Total: {item_count} items from {total_photos} photos, keys: {list(extracted_json.keys())[:30]}")
+            n = sum(1 for k in extracted_json if k.startswith("item_"))
+            print(f"  TOTAL: {n} items, {len(extracted_json)} keys")
 
         except HTTPException:
             raise
@@ -263,13 +257,13 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             extracted_json = {}
 
     item_count = sum(1 for k in extracted_json if k.startswith("item_") or k.startswith("concern_") or k.startswith("note_"))
+    print(f"Total: {item_count} items")
 
     if item_count == 0:
         print("WARNING: AI returned no data.")
         extracted_json = {}
 
-    import json as _json
-    data_json = _json.dumps(extracted_json)
+    data_json = json.dumps(extracted_json)
     input_pdf = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Texas_First_Auto_Inspection_Blank_v3.pdf"))
     output_pdf = os.path.join(tempfile.gettempdir(), f"inspection_{os.urandom(4).hex()}.pdf")
     try:
@@ -282,8 +276,9 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     response.headers["X-Data-Count"] = str(item_count)
     response.headers["X-Extracted-Json"] = data_json[:2000]
     if item_count == 0:
-        err_detail = "; ".join(f"photo {t}: {m}" for m, t, _ in all_errors[-5:]) if all_errors else "unknown"
-        response.headers["X-Warning"] = f"AI error - {err_detail}"
+        actual_errors = all_errors[-3:]
+        err_detail = "; ".join(f"{t}: {d[:80]}" for _, t, d in actual_errors) if actual_errors else "unknown"
+        response.headers["X-Warning"] = f"0 items. {err_detail}"
     return response
 
 from fastapi.staticfiles import StaticFiles
