@@ -1,10 +1,8 @@
-import os, json, re
+import os, json, base64
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from google import genai
-from google.genai import types
 import tempfile
 from io import BytesIO
 from PIL import Image
@@ -55,50 +53,46 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-BATCH1_PROMPT = """These are PHOTOS 1-4 of a 7-page Texas 173-point vehicle inspection form.
+CLAUDE_PROMPT = """These images show a filled Texas 173-point vehicle inspection form
+with handwritten checkmarks in boxes and handwritten notes in the Details column.
 
-The pages contain:
-- Page 1: Header info (Date, VIN, ODO, Make/Model, Client, Sales Rep, Dealership, Address) + Interior checklist (items 1-8) + Seats checklist (items 9-24)
-- Pages 2-3: Electrical checklist (items 25-63) + Dashboard (items 64-78) + Safety (items 79-83) + Exterior (items 84-101)
-- Page 4: Glass (items 102-113) + Mirrors (items 114-116) + start of Tires (items 117-121)
+For EVERY item number visible across ALL images, identify:
+- Which checkbox column has a pen mark (checkmark, X, or filled box)
+- Any handwritten text in the Details column
+- Header info at the top (date, VIN, client, etc.)
+- Customer concerns at the end
 
-For EVERY item number that has a handwritten checkmark, X, or pen mark in a checkbox:
-item_N|COLUMN_HEADER|notes
+Return ONLY a raw JSON object — no markdown, no code fences, no extra text:
+{
+  "header": {"date":"","odo":"","vin":"","make_model":"","client":"","sales_rep":"","dealership":"","address":""},
+  "items": {"1":{"col":"","detail":""}, "2":{"col":"","detail":""}, ...},
+  "concerns": ["",""]
+}
 
-COLUMN_HEADER = the printed text at the top of the column (OK, PASS, FAIL, WORKS, BROKEN, CRACKED, BLEMISH, DIRTY, NA, YES, NO, SCRATCH, DING, CHIP, RUST, DENT, CHIPS, CRACK, HAZY, MISSING, EXCELLENT, GOOD, FAIR, POOR).
+EXACT column name values to use per item range:
+- Items 1-8: OK / PASS / FAIL
+- Items 9-24: PASS / BLEMISH / DIRTY
+- Items 25-63: WORKS / BROKEN / CRACKED
+- Items 64-78: PASS / FAIL / NA
+- Items 79-83: PASS / FAIL / NA
+- Items 84-101: OK / SCRATCH / DING / CHIP / RUST / DENT
+- Items 102-113: OK / CHIP / CRACKED
+- Items 114-116: OK / CHIPS / CRACK / HAZY / MISSING
+- Items 117-124: EXCELLENT / GOOD / FAIR / POOR
+- Items 125-146: NO / YES / NA
+- Items 147-151: PASS / FAIL / NA
+- Items 152-157: FAIL / PASS / NA
+- Items 158-161: EXCELLENT / GOOD / FAIR / POOR
+- Items 162-167: FAIL / PASS / NA
+- Items 168-170: PASS / FAIL / NA
+- Items 171: EXCELLENT / GOOD / FAIR / POOR
+- Items 172-173: YES / NO / NA
 
-Read header fields:
-header|s_date|value
-header|vin|value
-header|odo|value
-header|make_model|value
-header|client|value
-header|sales_rep|value
-header|dealership|value
-header|address|value
-
-Only output pipe-delimited lines. No other text."""
-
-BATCH2_PROMPT = """These are PHOTOS 5-7 of a 7-page Texas 173-point vehicle inspection form.
-
-The pages contain:
-- Page 5: Tires continued (items 122-124) + Underhood (items 125-146) + Suspension (items 147-151) + Undercarriage (items 152-157)
-- Page 6: Test Drive (items 158-161) + Brake (items 162-167) + Diagnostics (items 168-170) + Overall (item 171) + Frame Damage (item 172) + Flood Damage (item 173)
-- Page 7: Customer concerns
-
-For EVERY item number that has a handwritten checkmark, X, or pen mark in a checkbox:
-item_N|COLUMN_HEADER|notes
-
-COLUMN_HEADER = the printed text at the top of the column (OK, PASS, FAIL, WORKS, BROKEN, CRACKED, BLEMISH, DIRTY, NA, YES, NO, SCRATCH, DING, CHIP, RUST, DENT, CHIPS, CRACK, HAZY, MISSING, EXCELLENT, GOOD, FAIR, POOR).
-
-Read customer concerns from the last page:
-concern|1|text
-concern|2|text
-concern|3|text
-concern|4|text
-concern|5|text
-
-Only output pipe-delimited lines. No other text."""
+Rules:
+- If no box is ticked for a row, use col:""
+- Copy the exact handwritten Details text into "detail"
+- Output ALL 173 items, even ones you couldn't read (use col:"" for those)
+- Return ONLY the JSON object, nothing else."""
 
 VALID_COLUMNS = {
     "OK", "PASS", "FAIL", "WORKS", "BROKEN", "CRACKED",
@@ -108,155 +102,200 @@ VALID_COLUMNS = {
     "EXCELLENT", "GOOD", "FAIR", "POOR",
 }
 
-def parse_ai_output(text):
+def claude_json_to_flat(data):
     result = {}
-    for line in text.split('\n'):
-        line = line.strip()
-        if not line or '|' not in line:
+    header = data.get("header", {})
+    hdr_map = {
+        "date": "s_date", "odo": "odo", "vin": "vin",
+        "make_model": "make_model", "client": "client",
+        "sales_rep": "sales_rep", "dealership": "dealership",
+        "address": "address",
+    }
+    for ck, pk in hdr_map.items():
+        val = header.get(ck, "")
+        if val:
+            result[pk] = val.strip()
+
+    items = data.get("items", {})
+    for num_str, item_data in items.items():
+        try:
+            item_num = int(num_str)
+            if item_num < 1 or item_num > 173:
+                continue
+        except ValueError:
             continue
-        parts = [p.strip() for p in line.split('|')]
+        col = item_data.get("col", "").strip().upper()
+        detail = item_data.get("detail", "").strip()
+        if col and col in VALID_COLUMNS:
+            result[f"item_{item_num}_{col}"] = True
+        elif col:
+            print(f"  UNKNOWN COLUMN '{col}' for item {item_num}")
+        if detail:
+            result[f"note_{item_num}"] = detail
 
-        if len(parts) >= 2 and parts[0].startswith('item_'):
-            try:
-                item_num = int(parts[0].split('_')[1])
-                if item_num < 1 or item_num > 173:
-                    continue
-            except (ValueError, IndexError):
-                continue
-            status = parts[1].upper().replace('.', '').strip()
-            if status in ('NONE', 'NONE.', 'SKIPPED', 'N/A'):
-                continue
-            if status in VALID_COLUMNS:
-                result[f"item_{item_num}_{status}"] = True
-            elif status:
-                print(f"  UNKNOWN COLUMN '{status}' for item {item_num}")
-            if len(parts) >= 3 and parts[2]:
-                result[f"note_{item_num}"] = parts[2].strip()
-
-        elif len(parts) >= 2 and parts[0].lower() == 'header':
-            field = parts[1].strip().lower().replace(' ', '_')
-            val = parts[2].strip() if len(parts) > 2 else ''
-            result[field] = val
-
-        elif len(parts) >= 2 and parts[0].lower() == 'concern':
-            try:
-                cn = int(parts[1])
-                if 1 <= cn <= 5:
-                    result[f"concern_{cn}"] = parts[2].strip() if len(parts) > 2 else ''
-            except ValueError:
-                pass
+    concerns = data.get("concerns", [])
+    for i, concern_text in enumerate(concerns):
+        if concern_text and concern_text.strip():
+            result[f"concern_{i+1}"] = concern_text.strip()
 
     return result
 
-def merge_results(existing, new):
-    for k, v in new.items():
-        if k not in existing:
-            existing[k] = v
+def extract_json_from_text(raw):
+    raw = raw.strip()
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        if len(parts) >= 3:
+            raw = parts[1]
+        else:
+            raw = raw[3:]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(raw[start:end+1])
+        raise ValueError(f"Could not parse JSON. Raw[:300]: {raw[:300]}")
+
+def extract_with_claude(image_parts, api_key, model_name="claude-sonnet-4-6"):
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+    content = []
+    for i, (img_data, mime, fname) in enumerate(image_parts):
+        b64 = base64.b64encode(img_data).decode()
+        content.append({"type": "text", "text": f"=== IMAGE {i+1} of {len(image_parts)} ==="})
+        content.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}})
+    content.append({"type": "text", "text": CLAUDE_PROMPT})
+
+    response = client.messages.create(
+        model=model_name,
+        max_tokens=4096,
+        messages=[{"role": "user", "content": content}]
+    )
+    raw = "".join(block.text for block in response.content if hasattr(block, "text"))
+    return raw
 
 @app.post("/api/process-inspection")
 async def process_inspection(files: List[UploadFile] = File(...)):
     check_quota()
-    api_key = os.environ.get("GEMINI_API_KEY")
+    claude_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
     all_errors = []
-    if not api_key:
-        print("No API key set. Set GEMINI_API_KEY environment variable.")
-        extracted_json = {}
-    else:
-        import time
+    raw_responses = []
+    extracted_json = {}
 
-        def normalize_image(data, orig_ct):
-            ct = (orig_ct or "image/png").lower().replace("image/jpg", "image/jpeg")
-            try:
-                img = Image.open(BytesIO(data))
-                w, h = img.size
-                if max(w, h) > 2000:
-                    ratio = 2000 / max(w, h)
-                    img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
-                buf = BytesIO()
-                img.save(buf, format="JPEG", quality=90)
-                return buf.getvalue(), "image/jpeg"
-            except Exception:
-                return data, ct
+    import time
 
+    def normalize_image(data, orig_ct):
+        ct = (orig_ct or "image/png").lower().replace("image/jpg", "image/jpeg")
         try:
-            client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
+            img = Image.open(BytesIO(data))
+            w, h = img.size
+            if max(w, h) > 2000:
+                ratio = 2000 / max(w, h)
+                img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=90)
+            return buf.getvalue(), "image/jpeg"
+        except Exception:
+            return data, ct
 
-            photo_data = []
-            for f in files:
-                try:
-                    img_bytes = await f.read()
-                except Exception as e:
-                    print(f"  READ ERROR for {f.filename}: {type(e).__name__}: {e}")
-                    raise
-                print(f"  {f.filename}: {len(img_bytes)} bytes, {f.content_type}")
-                try:
-                    image_data, mime_type = normalize_image(img_bytes, f.content_type)
-                except Exception as e:
-                    print(f"  NORMALIZE ERROR for {f.filename}: {type(e).__name__}: {e}")
-                    raise
-                photo_data.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
+    try:
+        photo_data = []
+        for f in files:
+            try:
+                img_bytes = await f.read()
+            except Exception as e:
+                print(f"  READ ERROR for {f.filename}: {type(e).__name__}: {e}")
+                raise
+            print(f"  {f.filename}: {len(img_bytes)} bytes, {f.content_type}")
+            try:
+                image_data, mime_type = normalize_image(img_bytes, f.content_type)
+            except Exception as e:
+                print(f"  NORMALIZE ERROR for {f.filename}: {type(e).__name__}: {e}")
+                raise
+            photo_data.append((image_data, mime_type, f.filename))
 
-            mid = (len(photo_data) + 1) // 2
-            batches = [
-                (photo_data[:mid], BATCH1_PROMPT, "batch1"),
-                (photo_data[mid:], BATCH2_PROMPT, "batch2"),
-            ]
-
+        if not photo_data:
+            print("No photos uploaded.")
             extracted_json = {}
-            raw_responses = []
-            for batch_parts, batch_prompt, batch_name in batches:
-                if not batch_parts:
-                    continue
-                print(f"  Sending {batch_name} ({len(batch_parts)} photos)")
-
-                for model_name in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
-                    success = False
-                    for attempt in range(3):
-                        try:
-                            print(f"    {model_name} attempt {attempt+1}/3")
-                            response = client.models.generate_content(
-                                model=model_name,
-                                contents=batch_parts + [batch_prompt],
-                            )
-                            raw = response.text.strip()
-                            lines_count = len([l for l in raw.split('\n') if '|' in l])
-                            print(f"    RAW: {len(raw)} chars, {lines_count} lines")
-                            print(f"    RAW: {raw[:500]}")
-                            if raw.startswith("```"): raw = raw[3:]
-                            if raw.endswith("```"): raw = raw[:-3]
-                            raw = raw.strip()
-                            partial = parse_ai_output(raw)
-                            n = sum(1 for k in partial if k.startswith("item_"))
-                            print(f"    Parsed: {n} items")
-                            merge_results(extracted_json, partial)
-                            raw_responses.append(f"=== {batch_name} ({model_name}) ===\n{raw[:800]}")
-                            success = True
-                            break
-                        except HTTPException:
-                            raise
-                        except Exception as e:
-                            err_str = str(e)
-                            print(f"    FAILED: {type(e).__name__}: {err_str[:150]}")
-                            all_errors.append((model_name, batch_name, err_str[:200]))
-                            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                                print(f"    Quota exhausted")
-                                break
-                            time.sleep(1)
-                            continue
-                    if success:
+        elif claude_key:
+            print(f"  Using Claude API with {len(photo_data)} photos")
+            for model_name in ["claude-sonnet-4-6", "claude-3-5-sonnet-20241022"]:
+                success = False
+                for attempt in range(3):
+                    try:
+                        raw = extract_with_claude(photo_data, claude_key, model_name)
+                        print(f"  RAW ({model_name}): {len(raw)} chars")
+                        raw_responses.append(f"=== {model_name} ===\n{raw[:500]}")
+                        parsed = extract_json_from_text(raw)
+                        extracted_json = claude_json_to_flat(parsed)
+                        n = sum(1 for k in extracted_json if k.startswith("item_"))
+                        print(f"  Parsed: {n} items")
+                        success = True
                         break
-
-                time.sleep(2)
-
-            n = sum(1 for k in extracted_json if k.startswith("item_"))
-            print(f"  TOTAL: {n} items, {len(extracted_json)} keys")
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            import traceback
-            print(f"ERROR: {traceback.format_exc()}")
+                    except HTTPException:
+                        raise
+                    except Exception as e:
+                        err_str = str(e)
+                        print(f"  {model_name} FAILED: {type(e).__name__}: {err_str[:200]}")
+                        all_errors.append((model_name, type(e).__name__, err_str[:200]))
+                        time.sleep(1)
+                        continue
+                if success:
+                    break
+        elif gemini_key:
+            print(f"  Fallback to Gemini API with {len(photo_data)} photos")
+            from google import genai
+            from google.genai import types as gemini_types
+            client = genai.Client(api_key=gemini_key, http_options={'api_version': 'v1'})
+            gemini_parts = [gemini_types.Part.from_bytes(data=d, mime_type=m) for d, m, _ in photo_data]
+            for model_name in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
+                success = False
+                for attempt in range(3):
+                    try:
+                        print(f"    {model_name} attempt {attempt+1}/3")
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=gemini_parts + [CLAUDE_PROMPT],
+                        )
+                        raw = response.text.strip()
+                        print(f"    RAW: {len(raw)} chars")
+                        raw_responses.append(f"=== {model_name} ===\n{raw[:500]}")
+                        if raw.startswith("```"): raw = raw[3:]
+                        if raw.endswith("```"): raw = raw[:-3]
+                        raw = raw.strip()
+                        parsed = extract_json_from_text(raw)
+                        extracted_json = claude_json_to_flat(parsed)
+                        n = sum(1 for k in extracted_json if k.startswith("item_"))
+                        print(f"    Parsed: {n} items")
+                        success = True
+                        break
+                    except HTTPException:
+                        raise
+                    except Exception as e:
+                        err_str = str(e)
+                        print(f"    FAILED: {type(e).__name__}: {err_str[:200]}")
+                        all_errors.append((model_name, type(e).__name__, err_str[:200]))
+                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                            break
+                        time.sleep(1)
+                        continue
+                if success:
+                    break
+        else:
+            print("No API key set. Set ANTHROPIC_API_KEY or GEMINI_API_KEY.")
             extracted_json = {}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"ERROR: {traceback.format_exc()}")
+        extracted_json = {}
 
     item_count = sum(1 for k in extracted_json if k.startswith("item_") or k.startswith("concern_") or k.startswith("note_"))
     print(f"Total: {item_count} items")
@@ -280,7 +319,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
     if item_count == 0:
         actual_errors = all_errors[-3:]
         err_detail = "; ".join(f"{t}: {d[:80]}" for _, t, d in actual_errors) if actual_errors else "unknown"
-        raw_snip = "\n".join(raw_responses)[:500] if raw_responses else "no response"
+        raw_snip = "\n".join(raw_responses)[:300] if raw_responses else "no response"
         response.headers["X-Warning"] = f"0 items. Errors: {err_detail}"
         response.headers["X-Raw-AI"] = raw_snip
     elif raw_responses:

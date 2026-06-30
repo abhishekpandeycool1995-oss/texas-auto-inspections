@@ -3,6 +3,7 @@ uvicorn
 python-multipart
 pypdf
 google-genai
+anthropic
 pydantic
 pymupdf
 Pillow

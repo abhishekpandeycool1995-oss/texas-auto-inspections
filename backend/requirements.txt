@@ -2,6 +2,7 @@ fastapi
 uvicorn
 python-multipart
 google-genai
+anthropic
 pydantic
 pymupdf
 Pillow
