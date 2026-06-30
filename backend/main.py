@@ -55,13 +55,32 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-PAGE_PROMPT_BODY = """One page of a Texas 173-point vehicle inspection form.
+PAGE_PROMPT_BODY = """You are analyzing a scanned/photographed inspection form page with rows of checkboxes.
 
-List EVERY item number visible that has a handwritten checkmark, X, or dot.
-For each item, say which column the mark is in by naming the column header printed at the top of the column (e.g. OK, PASS, FAIL, WORKS, BROKEN, etc.).
-Also include any handwritten notes.
+CRITICAL INSTRUCTIONS — follow these exactly:
+
+1. For each row, there are multiple empty square checkboxes side by side (e.g. □ □ □). Only ONE of them may contain a pen mark (checkmark, tick, X, or filled-in square).
+
+2. Do NOT guess based on what answer seems "likely" or "typical" for that item. Only report a box as checked if you can visually confirm a pen mark INSIDE that specific box's boundaries.
+
+3. If multiple checkboxes in a row look ambiguous or unclear, examine the exact pixel area inside each box individually before deciding.
+
+4. Distinguish between:
+   - An EMPTY box (just the square outline, no mark inside) → not checked
+   - A box with a clear tick/checkmark/X inside it → checked
+   - A faint smudge, shadow, or printing artifact → treat as NOT checked unless it's clearly a deliberate pen stroke
+
+5. If NO box in a row has a visible mark, skip that row entirely — do not default to any particular column.
+
+6. If a mark appears to overlap two adjacent boxes, choose the box where the majority of the ink/mark falls.
+
+7. Before finalizing your answer for each row, do a self-check: "Did I find an actual pen mark inside this exact box, or am I assuming based on the row label?" Only confirm if it's the former.
+
+8. Work through the image section by section, row by row, in order — do not skip around.
 
 Output each item as: item_NUMBER|COLUMN_HEADER|optional_notes
+
+COLUMN_HEADER is the text printed at the top of the column (e.g. OK, PASS, FAIL, WORKS, BROKEN, etc.).
 
 Examples:
 item_1|OK|no wind noise
