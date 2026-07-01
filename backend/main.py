@@ -55,18 +55,15 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-CLAUDE_PROMPT = """You are inspecting a Texas 173-point vehicle inspection form. These photos show the filled paper form.
+CLAUDE_PROMPT = """You are inspecting a filled Texas 173-point vehicle inspection form.
 
-YOUR TASK:
-Read EVERY row carefully. For each item (1-173), identify:
-1. Which checkbox column is marked (checkmark, X, or filled box)
-2. Any handwritten text in the far-right "Details" column — read the handwriting carefully
-3. Header info at top: date, odo reading, VIN, make/model, client, sales rep, dealership, address
-4. Customer concerns/notes written at the bottom of the form
+Scan EVERY row carefully. For each item:
+- Identify which checkbox column has a mark (checkmark, X, or filled box)
+- Read any handwritten text in the far-right Details column
+- Read header info at top (date, VIN, odo, etc.)
+- Read customer concerns at bottom
 
-Pay special attention to handwritten notes in the Details column — many rows have small handwriting there.
-
-Return ONLY this exact JSON structure — no markdown, no code fences, no extra text:
+Return ONLY this JSON — no markdown, no extra text:
 {
   "header": {"date":"","odo":"","vin":"","make_model":"","client":"","sales_rep":"","dealership":"","address":""},
   "items": {
@@ -77,12 +74,11 @@ Return ONLY this exact JSON structure — no markdown, no code fences, no extra 
   "concerns": ["",""]
 }
 
-Column values per item range (use EXACTLY these):
+Column values (use EXACTLY these):
 - Items 1-8: OK / PASS / FAIL
 - Items 9-24: PASS / BLEMISH / DIRTY
 - Items 25-63: WORKS / BROKEN / CRACKED
-- Items 64-78: PASS / FAIL / NA
-- Items 79-83: PASS / FAIL / NA
+- Items 64-83: PASS / FAIL / NA
 - Items 84-101: OK / SCRATCH / DING / CHIP / RUST / DENT
 - Items 102-113: OK / CHIP / CRACKED
 - Items 114-116: OK / CHIPS / CRACK / HAZY / MISSING
@@ -91,17 +87,11 @@ Column values per item range (use EXACTLY these):
 - Items 147-151: PASS / FAIL / NA
 - Items 152-157: FAIL / PASS / NA
 - Items 158-161: EXCELLENT / GOOD / FAIR / POOR
-- Items 162-167: FAIL / PASS / NA
-- Items 168-170: PASS / FAIL / NA
+- Items 162-170: PASS / FAIL / NA
 - Items 171: EXCELLENT / GOOD / FAIR / POOR
 - Items 172-173: YES / NO / NA
 
-CRITICAL RULES:
-- If no box is ticked, use col:""
-- Copy EVERY handwritten Detail text exactly as written
-- Output ALL 173 items — include every number even if blank
-- Double-check you didn't skip any rows
-- Return ONLY the raw JSON, nothing else."""
+CRITICAL: Output ALL 173 items. If no box is ticked use col:"". Return ONLY the JSON."""
 
 VALID_COLUMNS = {
     "OK", "PASS", "FAIL", "WORKS", "BROKEN", "CRACKED",
@@ -236,7 +226,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             extracted_json = {}
         elif claude_key:
             print(f"  Using Claude API with {len(photo_data)} photos")
-            for model_name in ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"]:
+            for model_name in ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"]:
                 success = False
                 for attempt in range(3):
                     try:
