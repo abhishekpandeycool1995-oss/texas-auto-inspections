@@ -229,7 +229,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             extracted_json = {}
         elif claude_key:
             print(f"  Using Claude API with {len(photo_data)} photos")
-            for model_name in ["claude-sonnet-4-6", "claude-3-5-sonnet-20241022"]:
+            for model_name in ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"]:
                 success = False
                 for attempt in range(3):
                     try:
