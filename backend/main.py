@@ -1,4 +1,6 @@
 import os, json, base64
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
@@ -180,7 +182,10 @@ def extract_with_claude(image_parts, api_key, model_name="claude-sonnet-4-6"):
 
 @app.post("/api/process-inspection")
 async def process_inspection(files: List[UploadFile] = File(...)):
-    check_quota()
+    try:
+        check_quota()
+    except Exception as e:
+        print(f"Quota error (non-fatal): {e}")
     claude_key = os.environ.get("ANTHROPIC_API_KEY", "")
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     all_errors = []
@@ -224,7 +229,7 @@ async def process_inspection(files: List[UploadFile] = File(...)):
             extracted_json = {}
         elif claude_key:
             print(f"  Using Claude API with {len(photo_data)} photos")
-            for model_name in ["claude-sonnet-4-6", "claude-3-5-sonnet-20241022"]:
+            for model_name in ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"]:
                 success = False
                 for attempt in range(3):
                     try:
@@ -313,18 +318,23 @@ async def process_inspection(files: List[UploadFile] = File(...)):
         import traceback, shutil
         print(f"PDF Error (returning blank): {traceback.format_exc()}")
         shutil.copy(input_pdf, output_pdf)
-    response = FileResponse(output_pdf, media_type="application/pdf", filename="Texas_1st_Auto_Inspection_Report.pdf")
-    response.headers["X-Data-Count"] = str(item_count)
-    response.headers["X-Extracted-Json"] = data_json[:2000]
-    if item_count == 0:
-        actual_errors = all_errors[-3:]
-        err_detail = "; ".join(f"{t}: {d[:80]}" for _, t, d in actual_errors) if actual_errors else "unknown"
-        raw_snip = "\n".join(raw_responses)[:300] if raw_responses else "no response"
-        response.headers["X-Warning"] = f"0 items. Errors: {err_detail}"
-        response.headers["X-Raw-AI"] = raw_snip
-    elif raw_responses:
-        response.headers["X-Raw-AI"] = "\n".join(raw_responses)[:1000]
-    return response
+    try:
+        response = FileResponse(output_pdf, media_type="application/pdf", filename="Texas_1st_Auto_Inspection_Report.pdf")
+        response.headers["X-Data-Count"] = str(item_count)
+        if item_count == 0:
+            actual_errors = all_errors[-3:]
+            err_detail = "; ".join(f"{t}: {d[:80]}" for _, t, d in actual_errors) if actual_errors else "unknown"
+            response.headers["X-Warning"] = f"0 items. Errors: {err_detail}"
+        return response
+    except Exception as e:
+        import traceback
+        print(f"FATAL: {traceback.format_exc()}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            content={"error": str(e)[:200]},
+            status_code=200,
+            headers={"X-Warning": f"Server error, blank PDF sent. {str(e)[:100]}"}
+        )
 
 from fastapi.staticfiles import StaticFiles
 frontend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
@@ -332,4 +342,5 @@ app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=True)
+    port = int(os.environ.get("PORT", 8002))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

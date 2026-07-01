@@ -7,3 +7,4 @@ pydantic
 pymupdf
 Pillow
 pillow-heif
+python-dotenv
