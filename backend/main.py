@@ -55,23 +55,29 @@ def get_quota():
         data = {"date": today, "count": 0}
     return {"used": data["count"], "limit": QUOTA_LIMIT, "remaining": QUOTA_LIMIT - data["count"]}
 
-CLAUDE_PROMPT = """These images show a filled Texas 173-point vehicle inspection form
-with handwritten checkmarks in boxes and handwritten notes in the Details column.
+CLAUDE_PROMPT = """You are inspecting a Texas 173-point vehicle inspection form. These photos show the filled paper form.
 
-For EVERY item number visible across ALL images, identify:
-- Which checkbox column has a pen mark (checkmark, X, or filled box)
-- Any handwritten text in the Details column
-- Header info at the top (date, VIN, client, etc.)
-- Customer concerns at the end
+YOUR TASK:
+Read EVERY row carefully. For each item (1-173), identify:
+1. Which checkbox column is marked (checkmark, X, or filled box)
+2. Any handwritten text in the far-right "Details" column — read the handwriting carefully
+3. Header info at top: date, odo reading, VIN, make/model, client, sales rep, dealership, address
+4. Customer concerns/notes written at the bottom of the form
 
-Return ONLY a raw JSON object — no markdown, no code fences, no extra text:
+Pay special attention to handwritten notes in the Details column — many rows have small handwriting there.
+
+Return ONLY this exact JSON structure — no markdown, no code fences, no extra text:
 {
   "header": {"date":"","odo":"","vin":"","make_model":"","client":"","sales_rep":"","dealership":"","address":""},
-  "items": {"1":{"col":"","detail":""}, "2":{"col":"","detail":""}, ...},
+  "items": {
+    "1": {"col":"","detail":""},
+    "2": {"col":"","detail":""},
+    ...all 173 items...
+  },
   "concerns": ["",""]
 }
 
-EXACT column name values to use per item range:
+Column values per item range (use EXACTLY these):
 - Items 1-8: OK / PASS / FAIL
 - Items 9-24: PASS / BLEMISH / DIRTY
 - Items 25-63: WORKS / BROKEN / CRACKED
@@ -90,11 +96,12 @@ EXACT column name values to use per item range:
 - Items 171: EXCELLENT / GOOD / FAIR / POOR
 - Items 172-173: YES / NO / NA
 
-Rules:
-- If no box is ticked for a row, use col:""
-- Copy the exact handwritten Details text into "detail"
-- Output ALL 173 items, even ones you couldn't read (use col:"" for those)
-- Return ONLY the JSON object, nothing else."""
+CRITICAL RULES:
+- If no box is ticked, use col:""
+- Copy EVERY handwritten Detail text exactly as written
+- Output ALL 173 items — include every number even if blank
+- Double-check you didn't skip any rows
+- Return ONLY the raw JSON, nothing else."""
 
 VALID_COLUMNS = {
     "OK", "PASS", "FAIL", "WORKS", "BROKEN", "CRACKED",
