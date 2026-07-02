@@ -10,20 +10,76 @@ const statusMessage = document.getElementById('status-message');
 const quotaUsed = document.getElementById('quota-used');
 const quotaLimit = document.getElementById('quota-limit');
 const quotaFill = document.getElementById('quota-fill');
+const processingOverlay = document.getElementById('processing-overlay');
+const processingText = document.getElementById('processing-text');
 
+const DAILY_LIMIT = 3;
 let currentFiles = [];
 
-async function fetchQuota() {
-    try {
-        const r = await fetch('/api/quota');
-        const d = await r.json();
-        quotaUsed.textContent = d.used;
-        quotaLimit.textContent = 10;
-        const pct = Math.min(100, (d.used / 10) * 100);
-        quotaFill.style.width = pct + '%';
-    } catch (_) {}
+function getQuota() {
+    const raw = localStorage.getItem('inspection_quota');
+    if (!raw) return { date: '', count: 0 };
+    try { return JSON.parse(raw); } catch { return { date: '', count: 0 }; }
 }
-fetchQuota();
+
+function saveQuota(q) {
+    localStorage.setItem('inspection_quota', JSON.stringify(q));
+}
+
+function getToday() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+function getRemaining() {
+    const q = getQuota();
+    if (q.date !== getToday()) return DAILY_LIMIT;
+    return Math.max(0, DAILY_LIMIT - q.count);
+}
+
+function incrementQuota() {
+    const today = getToday();
+    let q = getQuota();
+    if (q.date !== today) q = { date: today, count: 0 };
+    q.count += 1;
+    saveQuota(q);
+}
+
+function updateQuotaUI() {
+    const remaining = getRemaining();
+    const used = DAILY_LIMIT - remaining;
+    quotaUsed.textContent = used;
+    quotaLimit.textContent = DAILY_LIMIT;
+    const pct = (used / DAILY_LIMIT) * 100;
+    quotaFill.style.width = pct + '%';
+    if (remaining <= 0) {
+        document.querySelector('.quota-bar').classList.add('quota-exhausted');
+    } else {
+        document.querySelector('.quota-bar').classList.remove('quota-exhausted');
+    }
+}
+
+function setStep(step) {
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById(`step-${i}`);
+        el.classList.remove('active', 'done');
+        if (i < step) el.classList.add('done');
+        else if (i === step) el.classList.add('active');
+    }
+    const messages = ['Reading images...', 'Analyzing with AI...', 'Generating PDF...'];
+    if (step >= 1 && step <= 3) processingText.textContent = messages[step - 1];
+}
+
+function showProcessing() {
+    processingOverlay.classList.remove('hidden');
+    generateBtn.disabled = true;
+    setStep(1);
+}
+
+function hideProcessing() {
+    processingOverlay.classList.add('hidden');
+    generateBtn.disabled = false;
+    generateBtn.disabled = currentFiles.length === 0 || getRemaining() <= 0;
+}
 
 uploadZone.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -132,7 +188,8 @@ function resetUpload() {
 }
 
 function updateButtonState() {
-    generateBtn.disabled = currentFiles.length === 0;
+    const remaining = getRemaining();
+    generateBtn.disabled = currentFiles.length === 0 || remaining <= 0;
 }
 
 function showStatus(message, type) {
@@ -147,10 +204,12 @@ function hideStatus() {
 
 generateBtn.addEventListener('click', async () => {
     if (currentFiles.length === 0) return;
+    if (getRemaining() <= 0) {
+        showStatus('Daily limit reached (3 generations). Try again tomorrow.', 'error');
+        return;
+    }
 
-    generateBtn.disabled = true;
-    btnText.textContent = `Analyzing ${currentFiles.length} photo${currentFiles.length > 1 ? 's' : ''}...`;
-    spinner.classList.remove('hidden');
+    showProcessing();
     hideStatus();
 
     const formData = new FormData();
@@ -159,10 +218,15 @@ generateBtn.addEventListener('click', async () => {
     });
 
     try {
+        await new Promise(r => setTimeout(r, 600));
+        setStep(2);
+
         const response = await fetch('/api/process-inspection', {
             method: 'POST',
             body: formData
         });
+
+        setStep(3);
 
         if (!response.ok) {
             let msg = 'Failed to process inspection';
@@ -187,18 +251,22 @@ generateBtn.addEventListener('click', async () => {
         a.click();
         window.URL.revokeObjectURL(url);
 
+        incrementQuota();
+
         const warning = response.headers.get('X-Warning');
         if (warning) {
             showStatus(warning, 'warning');
         } else {
-            showStatus('Success! Your PDF has been generated.', 'success');
+            showStatus('PDF generated successfully! Ready to edit in your PDF viewer.', 'success');
         }
     } catch (error) {
         showStatus(error.message, 'error');
     } finally {
-        generateBtn.disabled = false;
+        hideProcessing();
+        updateButtonState();
+        updateQuotaUI();
         btnText.textContent = 'Generate Official PDF';
-        spinner.classList.add('hidden');
-        fetchQuota();
     }
 });
+
+updateQuotaUI();
